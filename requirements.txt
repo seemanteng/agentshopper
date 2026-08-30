@@ -1,0 +1,18 @@
+# Evaluator itself needs nothing beyond the stdlib. Everything below is for
+# agent_shopper's own pipeline.
+
+numpy>=1.26          # vectorized RRF/cosine score math
+scikit-learn>=1.4     # TfidfVectorizer + cosine_similarity for the vector route
+pydantic>=2.0          # structured LLM output schemas (Reranker judgments)
+python-dotenv>=1.0      # loads OPENAI_API_KEY/ANTHROPIC_API_KEY from .env for local runs
+
+# Frozen sentence-embedding model for the dense route (agent_shopper/dense_index.py).
+# No fine-tuning -- see that module's docstring. Deferred-imported (only loaded on
+# first actual model use), so importing agent_shopper doesn't require torch present.
+torch
+sentence-transformers
+
+# Optional: only imported when an API key is present (see agent_shopper/llm_client.py).
+# A paid LLM is NOT required -- the pipeline runs fully free/local without these.
+openai>=1.40
+anthropic>=0.40

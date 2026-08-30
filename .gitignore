@@ -16,3 +16,19 @@ docs/participant_release_checklist.md
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
 *.log
+
+# Agent Shopper local artifacts
+.venv/
+eval_runs.jsonl
+ablation_runs.jsonl
+reranker_cv_runs.jsonl
+override_query_strip_cv_runs.jsonl
+override_model_cv_runs.jsonl
+results_*.json
+data/catalog.jsonl.gz
+data/SHA256SUMS
+data/.embedding_cache/
+data/.dense_cache_*.npz
+data/.ablation_split_seed42.json
+.env.local
+
