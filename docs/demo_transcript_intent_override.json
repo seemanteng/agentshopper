@@ -1,0 +1,180 @@
+{
+  "sample_id": "public_0002",
+  "scenario_type": "intent_override",
+  "target_parent_asin": "B071X54486",
+  "target_title": "Hide & Drink, Rustic Handmade Full Grain Leather Men's Belt, Two Row Stitch Stylish Design - Everyday Belts for Men",
+  "hit_turn": 5,
+  "best_rank": 8,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm looking for Accessories Belts. Buckle closure",
+      "agent_message": "Here are 10 options that match what you've told me so far. What material would you like it to be made of?",
+      "ask_attribute": "material",
+      "top_recommendations": [
+        {
+          "parent_asin": "B00N27ZROW",
+          "title": "Braided Elastic Woven Stretch Belt Gold Buckle Beige and Solid Color Strap"
+        },
+        {
+          "parent_asin": "B0BX2RMJ54",
+          "title": "Verdusa Women's 2 Pack Buckle Elastic Straw Belts Boho Waist Belt"
+        },
+        {
+          "parent_asin": "B008C1X9QG",
+          "title": "Nike Adult Baseball Belt"
+        },
+        {
+          "parent_asin": "B0C2TZXDNP",
+          "title": "SKiporty Men's Ratchet Belt Leather 1 3/8'' Adjustable Belts for Men Dress Casual Jeans Comfort Trim to Fit"
+        },
+        {
+          "parent_asin": "B076FB5TWG",
+          "title": "Buckle-Down Men's Web Belt Alien, Multicolor, 1.5\" Wide-Fits up to 42\" Pant Size"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 2,
+      "user_message": "For that, what matters is: leather; 100% Leather.",
+      "agent_message": "Here are 10 options that match what you've told me so far. What style are you going for?",
+      "ask_attribute": "style",
+      "top_recommendations": [
+        {
+          "parent_asin": "B07RW633ZF",
+          "title": "Timberland PRO Men's 38mm Boot Leather Belts"
+        },
+        {
+          "parent_asin": "B01MYVYQV5",
+          "title": "Hagora Men Black Dark Brown Genuine Leather 3 Hole Rows 1-3/4\" Wide Buckle Belt"
+        },
+        {
+          "parent_asin": "B01LYZ2810",
+          "title": "Replacement Belt Strap 100% Genuine Leather Plain Casual Belt Strap with Snaps 1-1/2\"(38mm) Wide"
+        },
+        {
+          "parent_asin": "B072M9PJ3H",
+          "title": "find. Men's Leather Formal Belt"
+        },
+        {
+          "parent_asin": "B016B07WZI",
+          "title": "Dona Michi MEN'S WORK BELT BASKETWEAVE UNIFORM 1 3/4\" WIDE HEAVY DUTY BELT"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 3,
+      "user_message": "Actually, ignore my earlier preference. What I need is: leather.",
+      "agent_message": "Here are 10 options that match what you've told me so far. Do you have a color preference?",
+      "ask_attribute": "color",
+      "top_recommendations": [
+        {
+          "parent_asin": "B01MYVYQV5",
+          "title": "Hagora Men Black Dark Brown Genuine Leather 3 Hole Rows 1-3/4\" Wide Buckle Belt"
+        },
+        {
+          "parent_asin": "B06XYH8FH8",
+          "title": "Hanks 1.5\" Freedom Men\u2019s Heavy Duty Leather Belt - USA-Made, 100-Year Warranty"
+        },
+        {
+          "parent_asin": "B079Y63FN6",
+          "title": "SlideBelts Rustic Full Grain Leather Belt - Custom Fit"
+        },
+        {
+          "parent_asin": "B07RQSN383",
+          "title": "Timberland PRO Men's No-Scratch No Buckle Mechanic Belt"
+        },
+        {
+          "parent_asin": "B08FLYBP2J",
+          "title": "Lavemi Men's Real Leather Ratchet Dress Casual Belt, Cut to Exact Fit, Elegant Gift Box"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 4,
+      "user_message": "I don't have an additional preference for color.",
+      "agent_message": "Here are 10 options that match what you've told me so far. Is there a specific feature that matters most to you?",
+      "ask_attribute": "feature",
+      "top_recommendations": [
+        {
+          "parent_asin": "B00MTVT1GC",
+          "title": "Luna Sosano Ladies Premium Enamel Patent Leather Skinny Belt - Shiny Texture (Various Colors / 3 Sizes)"
+        },
+        {
+          "parent_asin": "B07LGRDWPN",
+          "title": "TeeYee Women OBI Belt Fashion Solid Color PU Leather Waist Band 67 in Extra Size"
+        },
+        {
+          "parent_asin": "B07SZ69C46",
+          "title": "Heart Shaped Waist Belt Wide Black Leather Belt for Women Girls Students Jeans Pants Ladies Dresses with Silver Metal Buckle,Black,Fit Pant Size 23-27 Inch"
+        },
+        {
+          "parent_asin": "B074X2819S",
+          "title": "Ariat Men's Sanded Brown Blue Inlay Belt"
+        },
+        {
+          "parent_asin": "B00N27ZROW",
+          "title": "Braided Elastic Woven Stretch Belt Gold Buckle Beige and Solid Color Strap"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 5,
+      "user_message": "For that, what matters is: Imported; Buckle closure.",
+      "agent_message": "Here are 10 options that match what you've told me so far. What size are you looking for?",
+      "ask_attribute": "size",
+      "top_recommendations": [
+        {
+          "parent_asin": "B01N2LFP2K",
+          "title": "Fossil Men's Griffin Belt-Cordovan"
+        },
+        {
+          "parent_asin": "B073XYQTNM",
+          "title": "Tony Lama Boys' Little Texas Belt And Buckle Brown"
+        },
+        {
+          "parent_asin": "B072M9PJ3H",
+          "title": "find. Men's Leather Formal Belt"
+        },
+        {
+          "parent_asin": "B07NZ4YQ3F",
+          "title": "Barry.Wang Men Ratchet Buckle or Strap Only Genuine Leather Belt Replacement Nickel Free Buckle Adjustable"
+        },
+        {
+          "parent_asin": "B01N44118B",
+          "title": "maikun Mens Dress Leather Belt Plaque Buckle 35mm Width For Father's Day"
+        }
+      ],
+      "target_rank_this_turn": 8,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": true
+    }
+  ]
+}

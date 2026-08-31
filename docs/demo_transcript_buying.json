@@ -1,0 +1,112 @@
+{
+  "sample_id": "public_0001",
+  "scenario_type": "buying",
+  "target_parent_asin": "B09PYB7B6Z",
+  "target_title": "QIAN0813 Celttic Knot Triple Moon Pentagram Pentacle Star Wicca Pendant Necklace Round Pagan Jewelry",
+  "hit_turn": 3,
+  "best_rank": 1,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "I'm looking for Jewelry Necklaces. A key requirement is: Material:alloy.",
+      "agent_message": "Here are 10 options that match what you've told me so far. Do you have a color preference?",
+      "ask_attribute": "color",
+      "top_recommendations": [
+        {
+          "parent_asin": "B09C8H33CM",
+          "title": "Punk Metal Crow Skull Necklace Gothic 3D Animal Raven Bird Skull Pendant Necklace High Polished Crow Bone Link Chain for Women Men Halloween Jewelry"
+        },
+        {
+          "parent_asin": "B08T9BLC57",
+          "title": "OfficialOtaku Mythosaur Skull Silver Pendant Necklace"
+        },
+        {
+          "parent_asin": "B07ZFM77HB",
+          "title": "SanLan Big Skull and Dead Moth Head Insect Jewellery Butterfly Pendant Necklace"
+        },
+        {
+          "parent_asin": "B0B1XK1M4F",
+          "title": "VANLAMS Key Necklace for Women, S925 Sterling Silver Angel Wings Key for Love Heart Pendant Necklace Birthday Gifts (Butterfly Key)"
+        },
+        {
+          "parent_asin": "B07RPV75CN",
+          "title": "Halawly Acrylic Beads Statement Strand Necklaces&Bracelet set- Christmas Necklace Costume Jewelry For Women,White Beaded Necklaces Present for Women Girls"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 2,
+      "user_message": "I don't have an additional preference for color.",
+      "agent_message": "Here are 10 options that match what you've told me so far. Is there a specific feature that matters most to you?",
+      "ask_attribute": "feature",
+      "top_recommendations": [
+        {
+          "parent_asin": "B08VNTPJHG",
+          "title": "Andsion Initial Letter Pendant Necklace for Men Boy Women Girl, 18K Gold Plated A-Z 26 Capital Initial Necklace Letter Necklaces, Solid Rope Chains 22 Inches"
+        },
+        {
+          "parent_asin": "B013LCULXY",
+          "title": "ClorisAccessory Raven Skull Stainless Steel Necklace Silver Black Color Antique, 18\" to 30\""
+        },
+        {
+          "parent_asin": "B07H4KFTW7",
+          "title": "Vintage Bronze Quartz Pocket Watch Analog Pendant Necklace Pocket Watch Chain for Men Women Boy Girl Kids Xmas Gift - Ahmedy Pocket Watch"
+        },
+        {
+          "parent_asin": "B0BLSKF382",
+          "title": "Silver Necklace for Women \u2013 Long Sterling Chain Necklaces for Womens \u2013 Fashion Jewelry for Women \u2013 Pretty and Strong Womans 925 Sterling Silver Chains Necklace \u2013 15.7 Inch 17.7 Inch 19.6 Inch"
+        },
+        {
+          "parent_asin": "B07BHRNTKZ",
+          "title": "Fashion 21 Women's Multi-Strand Acrylic Ball Bead Statement 18\" Necklace and Earrings Set"
+        }
+      ],
+      "target_rank_this_turn": null,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": false
+    },
+    {
+      "turn": 3,
+      "user_message": "For that, what matters is: Triple Moon Pentagram Symbol; The Triple Moon represents the Phases of the Moon which are linked to the three aspects of the Goddess and the phases of the Life of Women.The Pentagram representing the holistic r.",
+      "agent_message": "Here are 10 options that match what you've told me so far. What's your budget range?",
+      "ask_attribute": "budget",
+      "top_recommendations": [
+        {
+          "parent_asin": "B09PYB7B6Z",
+          "title": "QIAN0813 Celttic Knot Triple Moon Pentagram Pentacle Star Wicca Pendant Necklace Round Pagan Jewelry"
+        },
+        {
+          "parent_asin": "B08F4VQ8JC",
+          "title": "GUNGNEER Stainless Steel Triple Moon Goddess Triquetra Pentacle Necklace Pagan Wicca Star Pendant Jewelry Men Women"
+        },
+        {
+          "parent_asin": "B08P7G15VB",
+          "title": "Waysles Moonstone Star Necklace S925 Sterling Silver Star Moon Star Jewelry Gifts for Women\u2026"
+        },
+        {
+          "parent_asin": "B0C5J7FCYR",
+          "title": "AOBOCO Celtic Dragon Necklace S925 Sterling Silver Moonstone, Crystal Witch Necklace Triple Moon Goddess Pendant Animal Jewerly Mother's Day Birthday Gifts for Women Girls"
+        },
+        {
+          "parent_asin": "B0BT7KXFMM",
+          "title": "HAQUIL Mushroom Necklace Vintage Mushroom Pendant Cute Accessories Jewelry Gift for Women"
+        }
+      ],
+      "target_rank_this_turn": 1,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      },
+      "hit": true
+    }
+  ]
+}
