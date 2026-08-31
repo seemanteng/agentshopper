@@ -229,6 +229,16 @@ a bound against some external limit. The heuristic-only rollback path is
 much faster: 693.2s (≈11.6 minutes) for 200 sessions, ≈46 minutes projected
 for 800.
 
+*(These specific timings predate the dense-route packaging fix directly
+above -- they were measured against an earlier archive build where
+`DenseIndex` resolved its model from the Hugging Face id rather than the
+now-packaged local path. The per-turn dense search cost itself is
+unaffected by that change -- only model *loading* moved from a cache
+lookup to a local-directory load, and both are sub-second -- so these
+numbers are expected to still hold, but they haven't been re-measured
+against the corrected archive yet; treat them as a good estimate pending
+that re-run rather than a bit-exact current figure.)*
+
 **Timeout and size-limit status — resolved.** Originally flagged as three
 open organizer questions; all three are now answered by
 `docs/final_evaluation_faq.md` (published by the organizer after this
@@ -278,20 +288,38 @@ via `scripts/build_submission_archive.py` from an explicit file allowlist
 
 | Archive | Size | Default configuration |
 |---|---|---|
-| `submission-cross-encoder.zip` | 249,105,223 bytes (237.57 MB) | Cross-encoder enabled, α=0.30, K=100, packaged TinyBERT checkpoint included |
-| `submission-baseline.zip` | 92,007 bytes (0.09 MB) | Cross-encoder disabled in the staged config copy — rollback artefact, reproduces the 0.5674 heuristic baseline |
+| `submission-cross-encoder.zip` | 332,614,380 bytes (317.21 MB) | Cross-encoder enabled, α=0.30, K=100, packaged TinyBERT checkpoint included, plus the packaged dense-route checkpoint (below) |
+| `submission-baseline.zip` | 83,601,164 bytes (79.73 MB) | Cross-encoder disabled in the staged config copy — rollback artefact, reproduces the 0.5674 heuristic baseline; still includes the packaged dense-route checkpoint, since the dense route is unrelated to the cross-encoder toggle |
 
-Both were independently verified by **extracting them into a fresh temporary
-directory and running every check exclusively against the extracted copy**
-(never the working tree): the full 200-session evaluation for both variants,
-and a dedicated zero-environment-variable, network-blocked, real-Hugging-Face-cache-independent-for-its-own-checkpoint
-diagnostic run (see "Whether the cross-encoder is submission-default" below).
-The two ZIP archives themselves are rebuildable verification artefacts and
-were never committed (gitignored, per `scripts/build_submission_archive.py`'s
-own docstring). The underlying checkpoint (`models/cross_encoder/ms-marco-TinyBERT-L-6/`)
-*was* committed, via Git LFS, in a later pass, once bundling was confirmed
-allowed — see "resolved" above for the organizer's stated preference for a
-download-based approach instead, which this doesn't currently follow.
+**A real bug this verification step caught:** the allowlist originally
+didn't include `models/dense/` at all -- once `DENSE_MODEL_NAME` was
+repointed at that packaged local path (see the dense-route entry in "What
+we tried"), neither archive actually contained it, so a judge's run would
+have silently lost the entire dense retrieval route (`DenseIndex` degrades
+gracefully on a missing model rather than crashing -- so this would **not**
+have surfaced as an error, just a quiet drop in Hit Rate@10 versus every
+number documented in this README). Caught by this same extract-and-verify
+step, not inferred -- fixed by adding an unconditional dense-checkpoint
+copy to `build_submission_archive.py` for both variants, then re-verified
+by extracting the rebuilt archives into a fresh directory and confirming
+`DenseIndex` loads and returns real search results from each extracted
+copy with zero environment variables and no dev-cache reachable.
+
+Both archives are independently verified by **extracting them into a fresh
+temporary directory and running every check exclusively against the
+extracted copy** (never the working tree): the full 200-session evaluation
+for both variants, a dedicated zero-environment-variable, network-blocked,
+real-Hugging-Face-cache-independent-for-its-own-checkpoint diagnostic run
+(see "Whether the cross-encoder is submission-default" below), and now also
+the dense-route load-and-search check above. The two ZIP archives
+themselves are rebuildable verification artefacts and were never committed
+(gitignored, per `scripts/build_submission_archive.py`'s own docstring).
+Both underlying checkpoints (`models/cross_encoder/ms-marco-TinyBERT-L-6/`
+via Git LFS, `models/dense/all-MiniLM-L6-v2/` as a plain file) *are*
+committed -- see "resolved" above for the organizer's stated preference for
+a download-based approach instead, which the cross-encoder checkpoint
+doesn't currently follow (the dense checkpoint sidesteps this by not
+needing LFS at all).
 
 **A related finding, since fixed and, as of this pass, fully closed (see
 the dense-route entry in "What we tried" for the full story):** the

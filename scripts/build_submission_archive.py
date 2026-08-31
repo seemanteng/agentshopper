@@ -3,6 +3,16 @@ allowlist (no "everything except X" globbing), so its contents match what
 scripts/run_local_eval.py and scripts/smoke_test_cross_encoder_subprocess.py
 verify against in the acceptance run.
 
+The packaged dense-route embedding model (models/dense/all-MiniLM-L6-v2/,
+see scripts/prepare_dense_model_artifact.py) is included in BOTH variants,
+unconditionally -- unlike the cross-encoder checkpoint, the dense route is
+part of base retrieval fusion (config.ROUTE_WEIGHTS["dense"]), not the
+cross-encoder reranking stage, so it runs regardless of which variant is
+built. Omitting it would silently degrade to zero dense-route contribution
+in the packaged archive (DenseIndex degrades gracefully rather than
+crashing -- see agent_shopper/dense_index.py -- so this would NOT surface
+as an error, just a quiet drop in recall versus the working-tree numbers).
+
 Two variants:
 
   --variant cross-encoder (default)
@@ -16,9 +26,11 @@ Two variants:
       working tree) of agent_shopper/config.py has its cross-encoder block's
       fallback defaults patched back to the pre-promotion values
       (FROZEN_CROSS_ENCODER_ENABLED=False, alpha=0.0) before zipping, and
-      the checkpoint directory is omitted entirely (not needed when
-      disabled). This is not "set an env var" -- it's a different archive
-      whose own defaults are already off.
+      the cross-encoder checkpoint directory is omitted entirely (not
+      needed when disabled). This is not "set an env var" -- it's a
+      different archive whose own defaults are already off. The dense
+      checkpoint is still included (see above -- it's unrelated to the
+      cross-encoder toggle).
 
 data/catalog.jsonl is deliberately excluded from both (organizer-supplied
 at judging time, per this repo's own "distributed separately" convention --
@@ -54,6 +66,7 @@ ALLOWLIST = (
 )
 
 CROSS_ENCODER_MODEL_DIR = "models/cross_encoder/ms-marco-TinyBERT-L-6"
+DENSE_MODEL_DIR = "models/dense/all-MiniLM-L6-v2"
 
 _IGNORE_PATTERNS = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
 
@@ -107,6 +120,18 @@ def build(variant: str, output_path: Path) -> None:
         staging_dir.mkdir()
         print(f"Staging allowlisted files for variant '{variant}'...")
         _stage_allowlist(staging_dir)
+
+        # Dense-route checkpoint: unconditional, both variants -- see module
+        # docstring for why (it's part of base retrieval, not reranking).
+        dense_src = ROOT / DENSE_MODEL_DIR
+        if not dense_src.is_dir() or not (dense_src / "manifest.json").is_file():
+            raise SystemExit(
+                f"Packaged dense-route checkpoint not found at {dense_src} -- run "
+                "scripts/prepare_dense_model_artifact.py first."
+            )
+        dense_dst = staging_dir / DENSE_MODEL_DIR
+        dense_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(dense_src, dense_dst)
 
         if variant == "cross-encoder":
             model_src = ROOT / CROSS_ENCODER_MODEL_DIR
