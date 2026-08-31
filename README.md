@@ -121,6 +121,26 @@ signal terminations), 300 warm scoring batches (100 repeats × sizes 20/50/100)
 all clean, and candidate-order invariance (original vs. reversed order) PASS
 at all three sizes.
 
+**Fail-open circuit breaker.** A process-scoped safety net on top of the
+per-turn try/except in `FrozenCrossEncoderReranker.rerank` (which alone only
+covers a *raised* exception, not a hang). Every scoring attempt is bounded
+by `AGENT_SHOPPER_CROSS_ENCODER_TIMEOUT_SECONDS` (default 20s — roughly
+4-5x the worst real per-turn latency measured below); any failure or timeout
+trips a module-level breaker that keeps every later turn of every session in
+that process on the heuristic path without retrying, rather than repeating
+the same failed attempt every turn. Deliberately process-scoped, not
+session-scoped like the existing LLM reranker's `state.llm_disabled` — a
+local checkpoint failure is almost certainly a persistent environment issue,
+not a transient blip worth retrying per-session. Fault-injected against a
+nonexistent checkpoint path on the real pipeline: the breaker tripped on
+turn 1 (11.56s, well under the timeout), turns 2-3 dropped to 0.6s/0.46s
+(no repeated attempts), and the session completed normally throughout on
+the heuristic path — the exact 0.5674-reproducing floor, not a degraded or
+inconsistent result. The successful path is unaffected: re-run against the
+real, working checkpoint, every turn still shows `last_used_cross_encoder=
+True` with `alpha=0.30`, `depth=100`, no failure reason, and the breaker
+stays closed.
+
 **Cold-load and warm inference latency.** Measured on this machine (Apple
 M1, 8 cores, 8 GB RAM, CPU only — no CUDA/MPS available):
 

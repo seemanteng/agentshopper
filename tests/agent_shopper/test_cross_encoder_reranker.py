@@ -14,6 +14,7 @@ import random
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -53,15 +54,21 @@ class FakeScorer:
     call order or which other candidates are present -- exactly the
     pointwise-independence property the real model is required to have."""
 
-    def __init__(self, table: dict[str, float] | None = None, raise_on_score: Exception | None = None) -> None:
+    def __init__(
+        self, table: dict[str, float] | None = None, raise_on_score: Exception | None = None,
+        sleep_seconds: float = 0.0,
+    ) -> None:
         self.table = table or {}
         self.raise_on_score = raise_on_score
+        self.sleep_seconds = sleep_seconds  # simulates a hang, for circuit-breaker timeout tests
         self.calls: list[tuple[str, tuple[str, ...]]] = []
         self.last_load_seconds = 0.0
         self.last_score_seconds = 0.0
 
     def score(self, query_text: str, candidates: list[Product]) -> dict[str, float]:
         self.calls.append((query_text, tuple(c.parent_asin for c in candidates)))
+        if self.sleep_seconds:
+            time.sleep(self.sleep_seconds)
         if self.raise_on_score is not None:
             raise self.raise_on_score
         return {c.parent_asin: self.table.get(c.parent_asin, 0.0) for c in candidates}
@@ -230,6 +237,7 @@ class FrozenCrossEncoderScorerFrozenContractTest(unittest.TestCase):
         # local_files_only), which several tests here share on purpose).
         import agent_shopper.cross_encoder_reranker as cer_mod
         cer_mod._MODEL_CACHE.clear()
+        cer_mod._reset_circuit_breaker_for_tests()
 
     def test_ensure_loaded_freezes_a_real_module(self) -> None:
         try:
@@ -393,6 +401,8 @@ class FrozenCrossEncoderRerankerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.catalog = make_catalog()
         self.candidates = _candidates(self.catalog, [p.parent_asin for p in self.catalog.products])
+        import agent_shopper.cross_encoder_reranker as cer_mod
+        cer_mod._reset_circuit_breaker_for_tests()
 
     def test_alpha_zero_reproduces_heuristic_top_k_exactly(self) -> None:
         ctx = _ctx()
@@ -489,6 +499,92 @@ class FrozenCrossEncoderRerankerTest(unittest.TestCase):
         query_text, asins = fake.calls[0]
         self.assertEqual(query_text, "blue shoes")
         self.assertTrue(all(isinstance(a, str) for a in asins))
+
+
+class CircuitBreakerTest(unittest.TestCase):
+    """Fault injection for the fail-open circuit breaker
+    (cross_encoder_reranker._CIRCUIT_OPEN / _score_with_timeout): bounded by
+    a timeout, trips on any failure, stays tripped for the rest of the
+    process (module-scoped, deliberately not session-scoped -- see that
+    module's docstring), and the fallback it produces is byte-identical to
+    calling HeuristicReranker directly."""
+
+    def setUp(self) -> None:
+        self.catalog = make_catalog()
+        self.candidates = _candidates(self.catalog, [p.parent_asin for p in self.catalog.products])
+        import agent_shopper.cross_encoder_reranker as cer_mod
+        self.cer_mod = cer_mod
+        cer_mod._reset_circuit_breaker_for_tests()
+
+    def tearDown(self) -> None:
+        self.cer_mod._reset_circuit_breaker_for_tests()
+
+    def test_trips_on_ordinary_exception(self) -> None:
+        fake = FakeScorer(raise_on_score=RuntimeError("boom"))
+        rr = FrozenCrossEncoderReranker(scorer=fake, alpha=0.5)
+        rr.rerank(_ctx(), list(self.candidates), top_k=5)
+        self.assertTrue(self.cer_mod._CIRCUIT_OPEN)
+        self.assertIn("boom", self.cer_mod._CIRCUIT_OPEN_REASON)
+
+    def test_trips_on_timeout(self) -> None:
+        # Sleeps past a short, test-local timeout -- never waits the real
+        # 20s default. The scorer "succeeds" eventually (after 0.5s) but
+        # too late; the caller must have already moved on at 0.2s.
+        fake = FakeScorer(table={p.parent_asin: 1.0 for p in self.catalog.products}, sleep_seconds=0.5)
+        with patch.object(self.cer_mod, "FROZEN_CROSS_ENCODER_TIMEOUT_SECONDS", 0.2):
+            rr = FrozenCrossEncoderReranker(scorer=fake, alpha=0.5)
+            result = rr.rerank(_ctx(), list(self.candidates), top_k=5)
+        self.assertTrue(self.cer_mod._CIRCUIT_OPEN)
+        self.assertIn("timed out", self.cer_mod._CIRCUIT_OPEN_REASON)
+        self.assertFalse(rr.last_used_cross_encoder)
+        self.assertEqual(len(result), 5)  # still a valid fallback response, never raises
+
+    def test_stays_tripped_across_fresh_instances_not_instance_reuse(self) -> None:
+        # Trip the breaker with one failing scorer...
+        failing = FakeScorer(raise_on_score=RuntimeError("boom"))
+        rr1 = FrozenCrossEncoderReranker(scorer=failing, alpha=0.5)
+        rr1.rerank(_ctx(), list(self.candidates), top_k=5)
+        self.assertTrue(self.cer_mod._CIRCUIT_OPEN)
+
+        # ...then construct a SECOND, fully fresh reranker wrapping a SECOND,
+        # fresh, working scorer (mirrors get_frozen_cross_encoder_reranker
+        # building a new instance every turn) -- it must still fall back
+        # without ever touching the working scorer, proving this is real
+        # module-level persistence, not an artifact of reusing one instance.
+        working = FakeScorer(table={p.parent_asin: 1.0 for p in self.catalog.products})
+        rr2 = FrozenCrossEncoderReranker(scorer=working, alpha=0.5)
+        rr2.rerank(_ctx(), list(self.candidates), top_k=5)
+        self.assertEqual(working.calls, [])
+        self.assertFalse(rr2.last_used_cross_encoder)
+        self.assertIn("circuit_open", rr2.last_failure_reason)
+
+    def test_fallback_asin_order_matches_heuristic_baseline_exactly(self) -> None:
+        ctx = _ctx()
+        baseline = HeuristicReranker().rerank(ctx, list(self.candidates), top_k=5)
+
+        failing = FakeScorer(raise_on_score=RuntimeError("boom"))
+        FrozenCrossEncoderReranker(scorer=failing, alpha=0.5).rerank(ctx, list(self.candidates), top_k=5)
+        self.assertTrue(self.cer_mod._CIRCUIT_OPEN)
+
+        # A scorer that WOULD blend to a different order if it were ever
+        # consulted -- proves the fallback path, not a coincidence.
+        would_differ = FakeScorer(table={p.parent_asin: float(i) for i, p in enumerate(self.catalog.products)})
+        rr2 = FrozenCrossEncoderReranker(scorer=would_differ, alpha=0.5)
+        result = rr2.rerank(ctx, list(self.candidates), top_k=5)
+
+        self.assertEqual(
+            [c.product.parent_asin for c in result], [c.product.parent_asin for c in baseline],
+        )
+
+    def test_successful_path_unchanged_when_nothing_fails(self) -> None:
+        fake_table = {p.parent_asin: float((hash(p.parent_asin) % 100)) for p in self.catalog.products}
+        rr = FrozenCrossEncoderReranker(scorer=FakeScorer(table=fake_table), alpha=0.5, depth=100)
+        result = rr.rerank(_ctx(), list(self.candidates), top_k=len(self.candidates))
+        self.assertFalse(self.cer_mod._CIRCUIT_OPEN)
+        self.assertIsNone(self.cer_mod._CIRCUIT_OPEN_REASON)
+        self.assertTrue(rr.last_used_cross_encoder)
+        self.assertIsNone(rr.last_failure_reason)
+        self.assertEqual(len(result), len(self.candidates))
 
 
 class DisabledFeatureDispatchTest(unittest.TestCase):

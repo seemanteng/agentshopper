@@ -59,6 +59,8 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TYPE_CHECKING
 
 from agent_shopper.config import (
@@ -67,6 +69,7 @@ from agent_shopper.config import (
     FROZEN_CROSS_ENCODER_LOCAL_FILES_ONLY,
     FROZEN_CROSS_ENCODER_MAX_LENGTH,
     FROZEN_CROSS_ENCODER_MODEL,
+    FROZEN_CROSS_ENCODER_TIMEOUT_SECONDS,
     RRF_K,
 )
 from agent_shopper.models import Candidate, DistilledContext, Product
@@ -83,6 +86,46 @@ if TYPE_CHECKING:  # pragma: no cover -- typing only, never imported at runtime 
 # per-turn construction -- see dialog_policy.process_turn).
 _MODEL_CACHE: dict[tuple[str, int, bool], object] = {}
 
+# Fail-open circuit breaker (process-scoped, not session-scoped -- unlike the
+# LLM reranker's state.llm_disabled in dialog_policy.py/dialog_state.py, a
+# local checkpoint load/inference failure is almost certainly a persistent
+# environment issue, not a transient blip worth retrying per-session). Once
+# ANY scoring attempt fails or times out, this trips and every subsequent
+# FrozenCrossEncoderReranker.rerank call in this process -- across every
+# turn of every session, since a fresh instance is constructed each turn --
+# skips the cross-encoder entirely and falls back to the plain heuristic.
+# This is what lets a broken checkpoint reproduce the exact 0.5674 heuristic
+# floor across a full run instead of a degraded, repeatedly-failing one.
+_CIRCUIT_OPEN: bool = False
+_CIRCUIT_OPEN_REASON: str | None = None
+
+# Single-worker executor used only to bound a scoring attempt by a timeout.
+# Deliberately never wrapped in a `with` block and never explicitly shut
+# down: Python threads can't be forcibly killed, so a `.result(timeout=N)`
+# timeout leaves the underlying scorer.score() call still running in the
+# background. A `with ThreadPoolExecutor() as ex:` block would be wrong here
+# -- __exit__ calls shutdown(wait=True), which blocks until that orphaned
+# call finishes, defeating the entire point of the timeout. This is safe
+# specifically because a timeout immediately trips the circuit breaker
+# above, so no further work is ever submitted afterward -- an eternally
+# stuck worker thread just sits idle rather than blocking anything.
+_TIMEOUT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cross-encoder-timeout")
+
+
+def _trip_circuit_breaker(reason: str) -> None:
+    global _CIRCUIT_OPEN, _CIRCUIT_OPEN_REASON
+    _CIRCUIT_OPEN = True
+    _CIRCUIT_OPEN_REASON = reason
+
+
+def _reset_circuit_breaker_for_tests() -> None:
+    """Test-only. Unittest runs the whole suite in one process, so without
+    this a failure tripped by one test would silently short-circuit every
+    later test's rerank() calls in the same run."""
+    global _CIRCUIT_OPEN, _CIRCUIT_OPEN_REASON
+    _CIRCUIT_OPEN = False
+    _CIRCUIT_OPEN_REASON = None
+
 
 class CrossEncoderUnavailable(RuntimeError):
     """Raised by FrozenCrossEncoderScorer on any load or inference failure --
@@ -93,6 +136,23 @@ class CrossEncoderUnavailable(RuntimeError):
     def __init__(self, message: str, cause_type: str | None = None) -> None:
         super().__init__(message)
         self.cause_type = cause_type
+
+
+def _score_with_timeout(
+    scorer: "FrozenCrossEncoderScorer", query_text: str, products: list[Product], timeout_seconds: float,
+) -> dict[str, float]:
+    """Runs scorer.score(query_text, products) on the shared _TIMEOUT_EXECUTOR
+    and bounds it to timeout_seconds. A hang (not just a raised exception) in
+    model load or inference would otherwise stall the calling turn -- and by
+    extension the whole session -- indefinitely. On timeout, raises the same
+    CrossEncoderUnavailable callers already handle, so a hang flows through
+    identical fallback/circuit-breaker logic as any other failure -- callers
+    never need to special-case timeouts."""
+    future = _TIMEOUT_EXECUTOR.submit(scorer.score, query_text, products)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        raise CrossEncoderUnavailable(f"timed out after {timeout_seconds}s", cause_type="timeout") from exc
 
 
 def _format_product_text(product: Product) -> str:
@@ -342,8 +402,15 @@ class FrozenCrossEncoderReranker:
     finding that a hard top-K-only replacement would exclude real current
     hits), builds the K=100-hybrid union, scores it with a frozen
     cross-encoder, and fuses by weighted RRF. Falls back to the plain
-    heuristic ranking on any scorer failure -- never raises out of
-    rerank()."""
+    heuristic ranking on any scorer failure or timeout -- never raises out
+    of rerank(). Fail-open circuit breaker: the scoring attempt is bounded
+    by config.FROZEN_CROSS_ENCODER_TIMEOUT_SECONDS (a hang, not just a
+    raised exception, can't stall a turn indefinitely -- see
+    _score_with_timeout), and any failure trips a process-scoped breaker
+    (_CIRCUIT_OPEN) that keeps every later call in this process on the
+    heuristic path without retrying, so a broken checkpoint degrades a
+    whole run cleanly to the exact heuristic-only baseline rather than
+    repeating the same failed attempt every turn."""
 
     def __init__(
         self,
@@ -379,6 +446,12 @@ class FrozenCrossEncoderReranker:
         # HeuristicReranker.rerank). Needed so heuristic_rank below covers
         # every candidate that could end up in the union, not only top_k.
         heuristic_full = self.heuristic.rerank(ctx, candidates, top_k=len(candidates))
+        if _CIRCUIT_OPEN:
+            # Tripped by an earlier failure/timeout in this process (see
+            # _trip_circuit_breaker) -- skip the union build and scoring
+            # attempt entirely rather than repeat a known-failed call.
+            self.last_failure_reason = f"circuit_open: {_CIRCUIT_OPEN_REASON}"
+            return heuristic_full[:top_k]
         if self.alpha == 0.0:
             # alpha=0.0 must reproduce the heuristic's own top-10 exactly --
             # short-circuit rather than trust the fusion formula's algebra
@@ -392,15 +465,19 @@ class FrozenCrossEncoderReranker:
         self.last_union_size = len(union)
 
         try:
-            scores = self.scorer.score(ctx.session.query_text, [c.product for c in union])
+            scores = _score_with_timeout(
+                self.scorer, ctx.session.query_text, [c.product for c in union], FROZEN_CROSS_ENCODER_TIMEOUT_SECONDS,
+            )
             self.last_used_cross_encoder = True
             self.last_load_seconds = self.scorer.last_load_seconds
             self.last_score_seconds = self.scorer.last_score_seconds
         except CrossEncoderUnavailable as exc:
             self.last_failure_reason = str(exc)
+            _trip_circuit_breaker(str(exc))
             return heuristic_full[:top_k]
         except Exception as exc:  # noqa: BLE001 -- never let an unexpected scoring bug crash a turn
             self.last_failure_reason = f"unexpected: {type(exc).__name__}: {exc}"
+            _trip_circuit_breaker(f"unexpected: {type(exc).__name__}: {exc}")
             return heuristic_full[:top_k]
 
         # Deterministic semantic rank: score desc, parent_asin asc tie-break

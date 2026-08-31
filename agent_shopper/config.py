@@ -201,6 +201,14 @@ FROZEN_CROSS_ENCODER_ALPHA = _env_float("AGENT_SHOPPER_CROSS_ENCODER_ALPHA", 0.3
 # Reuses RRF_K (Pillar I's retrieval-fusion smoothing constant, already 60)
 # rather than a second constant with the same value -- see RRF_K above.
 
+# Fail-open circuit breaker: bounds a single scoring attempt (model load +
+# inference combined) to this many seconds. A hang (not just a crash) would
+# otherwise stall a turn indefinitely -- see
+# cross_encoder_reranker._score_with_timeout. 20s gives roughly 4-5x headroom
+# over the worst real per-turn latency measured on the packaged checkpoint
+# (mean ~4.2s, p95 ~4.5s -- see README.md's "Deployment readiness").
+FROZEN_CROSS_ENCODER_TIMEOUT_SECONDS = _env_float("AGENT_SHOPPER_CROSS_ENCODER_TIMEOUT_SECONDS", 20.0)
+
 # --- Pillar II: dialog state machine ----------------------------------------
 
 # A candidate pool bigger than this (and otherwise ambiguous) is "over-general".
