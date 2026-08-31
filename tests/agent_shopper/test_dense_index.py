@@ -8,6 +8,8 @@ sibling CrossEncoder loader."""
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,8 +17,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-from agent_shopper.dense_index import DenseIndex
+from agent_shopper.dense_index import DenseIndex, _model_cache_slug
 from tests.agent_shopper.fixtures import make_catalog
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class _FakeSTModule:
@@ -120,6 +124,71 @@ class DenseIndexSafetyTest(unittest.TestCase):
         for doc_index, score in results:
             self.assertIsInstance(doc_index, int)
             self.assertIsInstance(score, float)
+
+
+class ModelCacheSlugTest(unittest.TestCase):
+    """_model_cache_slug is what keeps DenseIndex.default_cache_path portable
+    once DENSE_MODEL_NAME defaults to an absolute local path rather than a
+    Hugging Face id -- see dense_index.py's own comment on why embedding the
+    full path directly would be both ugly and checkout-location-sensitive."""
+
+    def test_hf_id_uses_the_slug_after_the_slash(self) -> None:
+        self.assertEqual(_model_cache_slug("sentence-transformers/all-MiniLM-L6-v2"), "sentence-transformers_all-MiniLM-L6-v2")
+
+    def test_existing_local_directory_uses_only_its_own_name(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            packaged = Path(d) / "models" / "dense" / "all-MiniLM-L6-v2"
+            packaged.mkdir(parents=True)
+            # Not the full path, and not sensitive to where `d` happens to be.
+            self.assertEqual(_model_cache_slug(str(packaged)), "all-MiniLM-L6-v2")
+
+    def test_nonexistent_path_falls_back_to_hf_id_style_slugging(self) -> None:
+        # A path-shaped string that doesn't actually exist on disk (e.g. an
+        # env-var override to a directory that hasn't been created yet) is
+        # treated like an id, not silently misread as a real local checkout.
+        self.assertEqual(_model_cache_slug("/nonexistent/models/dense/all-MiniLM-L6-v2"), "_nonexistent_models_dense_all-MiniLM-L6-v2")
+
+
+class ProductionDefaultsTest(unittest.TestCase):
+    """Proves what a genuinely fresh, zero-`AGENT_SHOPPER_*`-env-var judge
+    process actually resolves DENSE_MODEL_NAME to -- mirrors
+    test_cross_encoder_reranker.py's own ProductionDefaultsTest exactly,
+    same reasoning: a subprocess with a scrubbed environment is what actually
+    answers "what does a judge's process see," not an in-process reload."""
+
+    def _run_in_subprocess(self, cwd: Path, env_overrides: dict[str, str] | None = None) -> str:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_SHOPPER_")}
+        env.update(env_overrides or {})
+        result = subprocess.run(
+            [sys.executable, "-c", "import agent_shopper.config as c; print(c.DENSE_MODEL_NAME); print(c.DENSE_MODEL_LOCAL_FILES_ONLY)"],
+            cwd=str(cwd), env=env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, msg=f"subprocess failed: {result.stderr}")
+        return result.stdout
+
+    def test_zero_env_var_default_resolves_to_the_packaged_checkpoint(self) -> None:
+        stdout = self._run_in_subprocess(REPO_ROOT)
+        model_name, local_only = stdout.strip().splitlines()
+        self.assertEqual(local_only, "True")
+        # Module-relative, not CWD-relative: must resolve to an absolute path
+        # under this repo's models/dense/ regardless of subprocess CWD.
+        self.assertTrue(model_name.startswith(str(REPO_ROOT)), msg=model_name)
+        self.assertIn("models/dense/all-MiniLM-L6-v2", model_name)
+        self.assertTrue(Path(model_name).is_dir(), msg=f"packaged checkpoint missing at {model_name}")
+        self.assertTrue((Path(model_name) / "manifest.json").is_file())
+
+    def test_model_path_is_cwd_independent(self) -> None:
+        # Same subprocess check from a working directory outside the
+        # repository entirely -- proves the Path(__file__).resolve()-based
+        # default doesn't depend on the caller's CWD.
+        stdout = self._run_in_subprocess(Path(tempfile.gettempdir()), {"PYTHONPATH": str(REPO_ROOT)})
+        model_name = stdout.strip().splitlines()[0]
+        self.assertTrue(model_name.startswith(str(REPO_ROOT)), msg=model_name)
+
+    def test_env_var_override_still_works(self) -> None:
+        stdout = self._run_in_subprocess(REPO_ROOT, {"AGENT_SHOPPER_DENSE_MODEL": "sentence-transformers/all-MiniLM-L6-v2"})
+        model_name = stdout.strip().splitlines()[0]
+        self.assertEqual(model_name, "sentence-transformers/all-MiniLM-L6-v2")
 
 
 if __name__ == "__main__":
