@@ -426,6 +426,15 @@ hit→miss versus the heuristic baseline, ≤10 recommendations every turn.
 
 ## Setup and installation
 
+**Environment used to produce every number in this README** (per
+`docs/final_evaluation_faq.md`'s disclosure requirement): Python 3.13.7,
+macOS (Apple M1, 8 cores, 8 GB RAM, CPU only — no CUDA/MPS available; see
+"Deployment readiness" for latency measured on this hardware), `torch`
+2.11.0, `sentence-transformers` 6.0.0, `scikit-learn` 1.7.1, `numpy` 2.3.2.
+No pinned Python version is required — this is disclosure, not a
+constraint — but a materially older Python (pre-3.10) or `torch` build is
+untested against this pipeline.
+
 ```bash
 git clone <this-repo-url> agent-shopper
 cd agent-shopper
