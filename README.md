@@ -15,6 +15,19 @@ is unmodified; the full agent implementation lives in the new
 [`agent_shopper/`](agent_shopper/) package, wired in through
 [`starter/agent.py`](starter/agent.py).
 
+### Results at a glance
+
+| | Hit Rate@10 | MRR | MTTC | TechnicalScore |
+|---|---|---|---|---|
+| Stock weak-BM25 starter agent (organizer baseline) | 0.125 | 0.068 | 9.81 | 0.107 |
+| **Agent Shopper (shipped default)** | **0.705** | **0.439** | **5.27** | **0.599** |
+
+A ~5.6x Hit Rate@10 and ~6.5x MRR improvement over the organizer baseline
+on the 200-session public dev set, no paid LLM call required (the shipped
+default is entirely local/free — see "LLM usage" below). See "Results on
+the public dev set" further down for the full progression and per-scenario
+breakdown, and "What we tried" for the eval evidence behind every step.
+
 ## How this addresses the problem statement
 
 The brief calls for four pillars; each maps to a small set of modules:
