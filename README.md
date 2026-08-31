@@ -51,6 +51,10 @@ a real evaluator run, not a separate, looser demo path:
   the scenario type Pillar II's intent-override handling was built for —
   see "How this addresses the problem statement" below.
 
+A narration script for a recorded walkthrough of both transcripts plus the
+validation discipline and final metrics is at
+[`docs/video_script.md`](docs/video_script.md).
+
 Reproduce either with:
 
 ```bash
