@@ -32,12 +32,18 @@ never needs torch loaded into the process at all.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import numpy as np
 
 from agent_shopper.catalog import Catalog
-from agent_shopper.config import DENSE_CACHE_DIR, DENSE_FIELD_WEIGHTS, DENSE_MODEL_NAME
+from agent_shopper.config import (
+    DENSE_CACHE_DIR,
+    DENSE_FIELD_WEIGHTS,
+    DENSE_MODEL_LOCAL_FILES_ONLY,
+    DENSE_MODEL_NAME,
+)
 from agent_shopper.models import Product
 
 _FIELD_NAMES = ("title", "attributes", "category", "description")
@@ -82,21 +88,52 @@ def default_cache_path(catalog: Catalog, model_name: str = DENSE_MODEL_NAME) -> 
 
 
 class DenseIndex:
+    """Failures degrade gracefully rather than propagate: if the embedding
+    model can't load (network-disabled judging environment + not already
+    cached -- see config.DENSE_MODEL_LOCAL_FILES_ONLY), this route
+    contributes nothing (empty field matrices, search() returns []) instead
+    of crashing Agent() construction, which is called once and reused for
+    every session -- a hard failure here would otherwise take down the
+    entire submission, not just this one route's contribution. Mirrors
+    cross_encoder_reranker.CrossEncoderUnavailable's "never let it crash"
+    contract, just at construction time rather than per-call."""
+
     def __init__(
         self, catalog: Catalog, model_name: str = DENSE_MODEL_NAME, cache_path: Path | str | None = None,
+        local_files_only: bool = DENSE_MODEL_LOCAL_FILES_ONLY,
     ) -> None:
         self.catalog = catalog
         self.model_name = model_name
+        self.local_files_only = local_files_only
         self._model = None  # lazy -- see module docstring
+        self._model_load_failed = False
         self._field_matrices: dict[str, np.ndarray] = {}
         self._cache_path = Path(cache_path) if cache_path is not None else default_cache_path(catalog, model_name)
         self._load_or_build()
 
     def _get_model(self):
-        if self._model is None:
+        if self._model is not None or self._model_load_failed:
+            return self._model
+        if self.local_files_only:
+            # Belt-and-suspenders offline enforcement, same reasoning and
+            # mechanism as cross_encoder_reranker.py's _ensure_loaded:
+            # local_files_only=True already blocks the top-level load call
+            # from downloading, but sentence-transformers/transformers can
+            # still make indirect network calls (e.g. revalidating a cached
+            # file's freshness) unless these are set too -- and without
+            # them, a network-disabled environment doesn't fail fast, it
+            # retries with backoff (observed directly during this project's
+            # offline verification work), which can stall Agent()
+            # construction for a long time before ultimately failing anyway.
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        try:
             from sentence_transformers import SentenceTransformer  # deferred: see module docstring
 
-            self._model = SentenceTransformer(self.model_name)
+            self._model = SentenceTransformer(self.model_name, local_files_only=self.local_files_only)
+        except Exception:  # noqa: BLE001 -- any load failure degrades this route, never crashes Agent()
+            self._model_load_failed = True
+            self._model = None
         return self._model
 
     def _load_cache(self) -> bool:
@@ -120,6 +157,13 @@ class DenseIndex:
         if self._load_cache():
             return
         model = self._get_model()
+        if model is None:
+            # Load failed (see _get_model) -- degrade this route to
+            # contributing nothing rather than crash Agent() construction.
+            # Zero-width so search() below can't index into it either;
+            # search() itself short-circuits on _model_load_failed first.
+            self._field_matrices = {field: np.zeros((len(self.catalog.products), 0), dtype=np.float32) for field in _FIELD_NAMES}
+            return
         matrices: dict[str, np.ndarray] = {}
         for field in _FIELD_NAMES:
             texts = [_field_text(p, field) or " " for p in self.catalog.products]
@@ -135,7 +179,15 @@ class DenseIndex:
     def search(self, query_text: str, limit: int) -> list[tuple[int, float]]:
         if not self.catalog.products or not query_text.strip():
             return []
+        if self._model_load_failed:
+            # Already known unavailable -- don't retry a failed load on
+            # every turn's search call, just report no results from this
+            # route (same "best-effort, never blocks the rest of the
+            # pipeline" contract as a cross-encoder load failure).
+            return []
         model = self._get_model()
+        if model is None:
+            return []
         query_vec = np.asarray(
             model.encode([query_text], normalize_embeddings=True), dtype=np.float32,
         )[0]

@@ -16,7 +16,7 @@ Out of scope: catalog modification, identifiers outside the frozen catalog, priv
 
 The frozen `Clothing_Shoes_and_Jewelry` catalog contains 50,000 products. Participant-visible fields are `parent_asin`, `title`, `features`, `description`, `price`, `categories`, `details`, `average_rating`, `rating_number`, and `store`. Only `parent_asin` is scored.
 
-The public set has 200 labeled development sessions. The organizer keeps 800 sessions private. Private intent cards, ground truth, and simulator state are never sent to the participant Agent.
+The public set has 200 labeled development sessions. The organizer keeps 800 additional sessions unreleased until the Devpost submission deadline. After the deadline, the final evaluation package will be released and teams will run the unmodified official evaluator in their own environments using their frozen submitted commit. During evaluation, intent cards and ground truth remain evaluator inputs and are never sent to the participant Agent.
 
 Direct user identifiers, purchase timestamps, free-text reviews, and raw purchase histories have been removed. The Agent sees only a safe aggregate `user_profile` with purchase-frequency and rating summaries plus controlled preference tags.
 
@@ -37,7 +37,7 @@ Both splits use the same fixed scenario mix:
 6. An Intent Override session cannot convert before the new intent is sent.
 7. The session ends after a valid hit or turn 10.
 
-The simulator policy decides what information to reveal. If natural-language paraphrasing is added by the organizer, it cannot decide correctness. Hits are always exact code matches.
+The simulator policy decides what information to reveal. Final evaluation messages follow the templates and deterministic response policy in the released official evaluator. No undisclosed natural-language paraphrases are introduced. Hits are always exact code matches.
 
 ## Required Agent Interface
 
@@ -90,7 +90,9 @@ The same metrics are reported separately for Buying, Browsing, Intent Override, 
 
 ## Model and API Policy
 
-Teams choose and manage their own model credentials. API keys must be passed through environment variables and never committed. Teams disclose model choice, approximate cost, token usage, latency, and any fallback behavior. The organizer does not need to issue a common API key.
+LLM usage is optional. Teams may use a legally accessible external LLM API, a local model, or a non-LLM approach. Teams run the final evaluation in their own environments, so network access and external API calls are allowed. Teams choose and manage their own credentials, usage limits, service availability, and costs. API keys must be passed through environment variables and never committed. Teams disclose model choice, approximate cost, token usage, latency, network dependencies, and any fallback behavior. The organizer does not issue a common API key, and an offline fallback is not mandatory.
+
+See `final_evaluation_faq.md` for the complete final evaluation policy.
 
 ## Final Deliverables
 

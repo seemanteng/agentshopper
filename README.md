@@ -58,7 +58,8 @@ self-contained checkpoint from `models/cross_encoder/ms-marco-TinyBERT-L-6/`
 fully offline — a judge's run needs zero `AGENT_SHOPPER_*` environment
 variables and no dependency on any developer's Hugging Face cache. See
 "Deployment readiness" below for the packaging method, offline verification,
-latency/memory numbers, and the organizer questions that remain open.
+latency/memory numbers, and the resolved organizer policy this was
+validated against.
 
 ### Deployment readiness
 
@@ -184,30 +185,55 @@ union):
 archive itself (not the working tree — see below), with the cross-encoder
 enabled by default and zero cross-encoder-specific environment variables:
 **4948.1s (≈82.5 minutes)**. Linear ×4 projection for the private 800-session
-set: **≈19,792s (≈5.5 hours)**, sequential, single-process — this is a
-straight-line extrapolation, not accounting for any judging-side parallelism
-or per-session timeout the organizer might impose (unknown, see below). The
-heuristic-only rollback path is much faster: 693.2s (≈11.6 minutes) for 200
-sessions, ≈46 minutes projected for 800.
+set: **≈19,792s (≈5.5 hours)**, sequential, single-process — a straight-line
+extrapolation only; no judging-side parallelism is imposed by the organizer
+(see below), so this is a reasonable estimate of real wall-clock time, not
+a bound against some external limit. The heuristic-only rollback path is
+much faster: 693.2s (≈11.6 minutes) for 200 sessions, ≈46 minutes projected
+for 800.
 
-**Timeout and size-limit status.** `docs/competition_specification.md`,
-`docs/submission_rules.md`, `docs/evaluation_config.json`, and
-`docs/agent_api_contract.json` were read in full. None specify a numeric
-per-call timeout, session timeout, or submission archive-size limit —
-`submission_rules.md` only states the organizer "reserves the right to run
-your submission under CPU, memory, timeout, and network restrictions"
-without giving values. Separately, and independent of any organizer limit:
-GitHub's own hard per-file push-block limit is 100 MB, and this checkpoint's
-`model.safetensors` alone is 255 MB — a normal `git push` will reject it
-outright without Git LFS. Whether checkpoint bundling or Git LFS is accepted
-for this competition is not addressed by any of the four documents above.
+**Timeout and size-limit status — resolved.** Originally flagged as three
+open organizer questions; all three are now answered by
+`docs/final_evaluation_faq.md` (published by the organizer after this
+project's initial fork, pulled in during this pass — see its "Hardware,
+Runtime, and Timeouts" and "Data, Catalog, and Derived Artifacts" sections
+for the full text) and the updated `docs/submission_rules.md`:
 
-**Exact organizer questions still open:**
-1. What is the per-call and/or per-session execution timeout?
-2. What is the submission archive-size limit, if any?
-3. May a local model checkpoint be bundled in the submission (via Git LFS,
-   a release artefact, or another mechanism), or must the agent run without
-   one?
+- **Timeout:** none. "There is no standardized organizer-provided CPU, RAM,
+  GPU, startup-time, or per-response limit because teams run the final
+  evaluation in their own environments... the current evaluator does not
+  impose a separate explicit per-response timeout." The 82.5-minute/5.5-hour
+  figures above are informational, not a risk against an external cap.
+- **Archive/package size:** "There is currently no track-specific
+  package-size limit." GitHub's own 100 MB hard per-file push-block limit
+  (independent of anything organizer-specific) still applies if pushing
+  through the normal git protocol — `model.safetensors` (255 MB) needed Git
+  LFS for that reason, not an organizer size rule.
+- **Checkpoint bundling:** explicitly allowed — "legally usable pretrained
+  embedding, reranking, and language models" and "precomputed local
+  artifacts" are named as permitted offline preprocessing. The organizer's
+  stated *preference*, however, is "documented and reproducible download
+  instructions **rather than** committed directly to the repository" for
+  large assets — the Git-LFS commit already made for
+  `models/cross_encoder/ms-marco-TinyBERT-L-6/` isn't forbidden by this, but
+  it also isn't the pattern the organizer asked for; worth reconsidering a
+  download-on-setup approach (`scripts/prepare_cross_encoder_artifact.py`
+  already does the offline-cache-to-local-directory half of this — it would
+  need a download step added, or the checkpoint published as a release
+  asset instead of an LFS blob) if this comes up again.
+
+**The bigger revision this resolves:** evaluation is not organizer-hosted or
+network-disabled at all — "teams will run the unmodified official evaluator
+in their own environments," network access and external APIs are allowed
+there, and "an offline fallback is not mandatory." The offline-packaging,
+circuit-breaker, and dense-route hardening work in this README remain
+genuinely good engineering (a team's own network can still be flaky
+mid-run, and failing fast/gracefully instead of hanging or crashing is
+strictly better either way) — but none of it was mitigating an organizer-
+imposed constraint, because that constraint doesn't exist. Treat every
+"protects against a network-disabled judging environment" framing below as
+"protects against the team's own environment having a bad network day,"
+which is a real but much lower-stakes risk than originally assumed.
 
 **Packaging and remaining blockers.** Two submission archives were built
 via `scripts/build_submission_archive.py` from an explicit file allowlist
@@ -223,34 +249,49 @@ directory and running every check exclusively against the extracted copy**
 (never the working tree): the full 200-session evaluation for both variants,
 and a dedicated zero-environment-variable, network-blocked, real-Hugging-Face-cache-independent-for-its-own-checkpoint
 diagnostic run (see "Whether the cross-encoder is submission-default" below).
-Neither archive has been committed, staged, or pushed — the 255 MB
-checkpoint's git-tracking mechanism (plain commit vs. Git LFS vs. a separate
-release artefact) is exactly the unresolved bundling-permission question
-above, left for a deliberate decision rather than picked automatically.
+The two ZIP archives themselves are rebuildable verification artefacts and
+were never committed (gitignored, per `scripts/build_submission_archive.py`'s
+own docstring). The underlying checkpoint (`models/cross_encoder/ms-marco-TinyBERT-L-6/`)
+*was* committed, via Git LFS, in a later pass, once bundling was confirmed
+allowed — see "resolved" above for the organizer's stated preference for a
+download-based approach instead, which this doesn't currently follow.
 
-**A related, separate finding (not part of this promotion, flagged for
-awareness):** the pre-existing dense-retrieval route
+**A related finding, since fixed (see the dense-route entry in "What we
+tried" for the full story):** the pre-existing dense-retrieval route
 (`agent_shopper/dense_index.py`, `config.DENSE_MODEL_NAME` =
 `sentence-transformers/all-MiniLM-L6-v2`) participates in every turn's
-retrieval and does **not** pass `local_files_only=True` or set any offline
-environment variable itself — unlike the cross-encoder, it would attempt a
-real network call in a network-disabled judging environment unless one is
-set externally. This is out of this task's scope ("promote the already-
-validated cross-encoder path," not a full pipeline offline-readiness audit)
-and was not modified, but is worth a follow-up given `submission_rules.md`'s
-"official scoring may run with network disabled" language.
+retrieval and originally had no `local_files_only` support and no error
+handling at all around model loading — worse than "would attempt a real
+network call," a load failure or a slow network-disabled retry loop
+(observed directly during this project's own offline-verification testing)
+would propagate uncaught through `Agent()` construction, which is called
+once and reused for every session — a whole-submission risk, not a
+per-turn one. Now mirrors the cross-encoder's own offline-enforcement and
+graceful-degradation pattern exactly (`config.DENSE_MODEL_LOCAL_FILES_ONLY`,
+default on). What remains open: the model itself still isn't packaged into
+a local artefact the way the cross-encoder checkpoint is, so a judging
+environment that's both network-disabled and doesn't already have this
+model cached will still lose the dense route for the run — now a fast,
+contained, graceful loss instead of a hang or a crash, but not yet a fully
+solved packaging gap.
 
-**Submission default vs. experimental.** The frozen cross-encoder is now the
+**Submission default vs. experimental.** The frozen cross-encoder is the
 **submission default** (`AGENT_SHOPPER_FROZEN_CROSS_ENCODER` defaults to
 enabled; opt out with `AGENT_SHOPPER_FROZEN_CROSS_ENCODER=0` to reproduce
 the 0.5674 heuristic-only baseline exactly — confirmed via a fresh full
 200-session run of `submission-baseline.zip`, bit-identical to the
 `post-revert-confirm` reference to 6 decimal places on every headline
-metric). This is **not** the same as calling it "deployment-ready": every
-technical gate below passed, but the three organizer questions above remain
-open, so this README does not claim the packaging is certified against
-official submission-size or timeout limits — that determination needs an
-organizer answer.
+metric). All three organizer questions that previously withheld a
+"deployment-ready" claim are now resolved (see "resolved" above) and don't
+block it: no timeout, no package-size limit, and checkpoint bundling is
+allowed. What's honestly still open, so this isn't oversold as fully
+certified either: (1) the organizer's stated *preference* for download-based
+large-asset delivery over a committed LFS blob isn't followed yet, and (2)
+the dense route's own embedding model still isn't packaged into a local
+artefact, so it depends on the team's own environment already having it
+cached or having network access at setup time (an offline fallback isn't
+required per the organizer's policy, but it's also not yet built for this
+one route).
 
 **Reproduction command** (exact validated configuration, zero cross-encoder-
 specific environment variables required — shown here explicitly for
@@ -542,6 +583,33 @@ once a comparison was decided. In order of impact:
   currently local-only (gitignored); a fresh clone without it would pay
   that 27 minutes again on first run, which is worth addressing before
   this is judged/deployed anywhere the cache doesn't travel with it.
+
+  **Offline-safety hardening (later pass, prompted by the cross-encoder
+  promotion work):** unlike the cross-encoder, this route had no
+  `local_files_only` support and no error handling around model loading at
+  all -- a load failure (or, empirically observed during this project's own
+  offline-verification testing, a network-disabled environment retrying
+  with exponential backoff rather than failing fast) would propagate
+  uncaught through `Agent()` construction, which is called once and reused
+  for every session. That's a whole-submission risk, not a per-session one:
+  every one of the 800 hidden sessions would fail, not just this route's
+  contribution. Fixed to mirror `cross_encoder_reranker.py`'s own pattern
+  exactly: `config.DENSE_MODEL_LOCAL_FILES_ONLY` (default on) passes
+  `local_files_only=True` to `SentenceTransformer(...)` and sets
+  `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`, and `DenseIndex` now degrades
+  gracefully on any load failure (empty field matrices, `search()` returns
+  `[]`, never retries a known-failed load) instead of crashing -- the same
+  "never let it crash the turn/session" contract the cross-encoder's own
+  `CrossEncoderUnavailable` handling already has, just applied at
+  construction time rather than per-call. Verified against the real
+  pipeline: a broken model path no longer crashes or hangs `Agent()`
+  construction, sessions complete normally on keyword+vector+category
+  alone, and the working path is unaffected (confirmed `_model_load_failed
+  is False`, identical recommendation counts). This does **not** solve the
+  separate packaging gap above (the model itself still isn't vendored, so a
+  network-disabled *and* not-already-cached judging environment will still
+  lose this route) -- it only makes that failure fast and contained instead
+  of a slow hang or a fatal crash.
 - **Calibrated override-probability model** (`agent_shopper/override_model.py`,
   `agent_shopper.dialog_policy._override_features`): a small logistic
   regression predicting P(this turn is an intent reversal) from 5 features
@@ -806,15 +874,110 @@ once a comparison was decided. In order of impact:
   the submission archive itself (not just the working tree) — the remaining
   objection (packaging risk) was resolved rather than merely accepted. See
   the "Deployment readiness" subsection immediately below for the complete
-  evidence trail, exact numbers, and the organizer questions (archive-size
-  limit, checkpoint-bundling/Git-LFS permission, numeric timeout) that
-  remain genuinely unresolved and are reported as open blockers rather than
-  silently assumed. Both the config flag and every re-validation script
+  evidence trail and exact numbers. The three organizer questions this
+  section originally reported as open (archive-size limit,
+  checkpoint-bundling/Git-LFS permission, numeric timeout) were genuinely
+  unresolved at the time and reported as blockers rather than silently
+  assumed either way -- they were later resolved by an organizer FAQ this
+  project's fork hadn't received yet (see "Deployment readiness"'s
+  "resolved" note for the full, verbatim policy). Both the config flag and
+  every re-validation script
   (`scripts/replay_cross_encoder_offline.py`, `scripts/cv_cross_encoder.py`,
   `scripts/prepare_cross_encoder_artifact.py`,
   `scripts/smoke_test_cross_encoder_subprocess.py`,
   `scripts/build_submission_archive.py`) are kept, fully tested, and
   documented.
+
+- **"Never-recalled" retrieval diagnostic and two reverted retrieval-side
+  attempts** (`scripts/diagnose_never_retrieved.py`, new, kept as a
+  read-only diagnostic tool): of the 65 heuristic-only misses, 26 are never
+  recalled by *any* route at *any* depth up to 200 (retrieve()'s hard cap)
+  — a retrieval-side failure no reranker change of any kind can fix,
+  distinct from the other 39 (recalled at least once, never ranked
+  top-10). A battery of read-only, offline, one-change-at-a-time
+  counterfactuals (re-querying `retrieval.retrieve()`/`bm25_index`/
+  `tfidf_index`/`dense_index`/`filter_products` directly with the real
+  recorded query/slots/plan from a single interactive pass, never a second
+  full re-simulation) found a striking structural pattern: **all 26 have
+  `gate_to_category=False`** on every turn, and 21 of them structurally
+  satisfy the accumulated slots' filter criteria (`filter_products`, no
+  depth cap) — the target was simply never *looked for* outside whatever
+  keyword/vector/dense already happened to surface, because the ungated
+  branch's category signal (`_soft_category_ranking`) only re-ranks
+  already-surfaced candidates, never independently recalls a filter-
+  matching one. Two candidate fixes were built and measured against a
+  freshly-captured heuristic-only baseline (`scripts/run_local_eval.py`,
+  bit-identical to `post-revert-confirm`: TechnicalScore 0.5674, HitRate@10
+  0.675) — **both reverted as net-negative**:
+
+  - *Category as an independent recall route on ungated turns* (reused the
+    gated branch's own `filter_products`+`rank_by_rating`, soft/RRF-
+    weighted rather than a hard gate, capped at `ROUTE_SEARCH_LIMIT`):
+    TechnicalScore 0.5674→0.5650, **zero of the 26 targets actually
+    recovered** (0 miss→hit), 1 new hit→miss (`public_0035`), rank
+    regressed on 7 sessions vs. improved on 3. The diagnostic's own
+    `route_category_at_500` counterfactual measured candidate
+    *availability* only (no depth cap, no reranking) — it never proved the
+    real, rating-heavy `HeuristicReranker` would actually place a newly-
+    available candidate in the top-10, and empirically it didn't. Exactly
+    the candidate-availability-vs-real-recovery gap this project's own
+    Hybrid-Union-Oracle methodology (`scripts/diagnose_retrieval.py`)
+    already warns about.
+  - *Raise per-route search depth 200→500*
+    (`config.RETRIEVAL_ROUTE_SEARCH_LIMIT`, `AGENT_SHOPPER_ROUTE_SEARCH_LIMIT`):
+    TechnicalScore 0.5674→0.5589 (worse), intent_override HitRate@10
+    collapsed 0.533→0.433, 43 of 200 sessions changed, only 3 miss→hit
+    (**none of them among the diagnosed 26** — `public_0008`/`0146`/`0175`
+    are unrelated sessions) against 4 new hit→miss and a 8:28 rank-
+    improve:regress ratio. A system-wide depth increase touches every
+    turn's RRF fusion, not just the 26 targeted ones, and the churn was
+    net-harmful.
+
+  Both changes were built, isolated (one at a time, per this project's own
+  discipline), measured with a full before/after session-level diff, and
+  reverted the same session they were tried — nothing was shipped or left
+  behind as a disabled toggle. The diagnostic script and its full per-
+  session evidence (`diagnose_never_retrieved.log`, gitignored) are kept;
+  the 26-session retrieval gap itself remains open, a genuine, unsolved
+  limitation — see "Limitations and what we'd improve with more time."
+
+- **Attempt #3: a smaller, capped, low-weight structured-match injection —
+  stopped before implementation, on corrected diagnostic evidence**
+  (`scripts/diagnose_conservative_injection.py`, new, kept as a read-only
+  diagnostic tool). The actual lesson from #1/#2 wasn't "the mechanism was
+  wrong" — it was that their *validating counterfactuals* only checked
+  candidate availability (unlimited depth, no reranking), never whether the
+  real, rating-heavy `HeuristicReranker` would actually place a newly-
+  available candidate in a real top-10 under the real `ROUTE_SEARCH_LIMIT`.
+  So before writing a single line of production code this time, the
+  counterfactual itself was corrected: for each of the 26 sessions, inject
+  a capped (5 or 10) set of not-already-surfaced `filter_products` matches
+  ranked by rating — exactly what a real implementation would do — into the
+  *real* candidates from the *real* `retrieve()` call, and run the result
+  through the *real*, unmodified `HeuristicReranker().rerank()` (its actual
+  `ctx`, captured the same monkeypatch way `scripts/diagnose_retrieval.py`
+  already does), checking real top-10 membership, not pool membership.
+
+  **Result: 0 of 26 recovered, at both cap=5 and cap=10.** Per the
+  design's own stop condition, implementation was never attempted — no
+  production code was touched. Why: of the 26, all had at least one
+  ungated, slots-filled (i.e. "applicable") turn, but the target entered
+  the rating-ranked injected set at all on only **2** of them — a rating-
+  based top-K cap excludes the vast majority of targets that structurally
+  match the slots but aren't highly rated, which is most of them. (This is
+  also why the earlier, uncapped `route_category_at_500` counterfactual
+  measured 21/26 "recoverable" — an artifact of having no depth cap at
+  all, not a realistic estimate.) Even the 2 sessions where the target did
+  enter the injected set still didn't survive `HeuristicReranker`'s own
+  scoring into the real top-10 — its 5-feature composite is dominated by
+  `rating` (~9x the other weights) and a fresh keyword/vector score of 0
+  for a never-lexically-surfaced candidate, so simply being present in the
+  pool is far from sufficient. This 26-session gap remains open;
+  a structured-match signal that can survive `HeuristicReranker`'s own
+  feature weighting (not just enter the pool) would need to compete on
+  something closer to its actual 5 features, not an independent rating-
+  based selection — a different, unexplored design, not a smaller version
+  of #1/#2.
 
 ## Development tools, APIs, libraries, and data
 
@@ -840,6 +1003,25 @@ once a comparison was decided. In order of impact:
 
 ## Limitations and what we'd improve with more time
 
+- **26 of 200 public sessions never recall the target from any route at
+  any depth** (see "What we tried") — a genuine, unsolved retrieval-side
+  gap, three attempts in. The dominant pattern (structurally present in the
+  accumulated slots but never independently recalled, since ungated turns'
+  category signal only re-ranks what keyword/vector/dense already
+  surfaced) is well-evidenced, but every fix tried so far regresses or
+  fails once measured against the *real* `HeuristicReranker` rather than
+  raw candidate availability — including a capped, rating-ranked injection
+  designed specifically to be conservative, which got 0/26 real recoveries
+  before implementation was even attempted. The common failure mode: a
+  candidate has to compete on `HeuristicReranker`'s actual 5 learned
+  features (`bm25`, `vector`, `attr_match`, `rating`, `price_fit` —
+  `rating` dominates ~9x) to survive into a real top-10, and a
+  structurally-matching-but-unrated-or-lexically-absent candidate mostly
+  doesn't. A version worth trying next would need to give the injected
+  candidates a *fabricated* bm25/vector-comparable score (not just
+  presence) so they compete on the same terms as everything else, or
+  accept this gap as retrieval-hard on this catalog rather than reranker-
+  fixable.
 - **Slot extraction is keyword/regex-based**, not learned — it covers the
   vocabulary we hand-curated (materials, colors, styles, use-cases,
   category words) and will miss paraphrases outside that list. A small

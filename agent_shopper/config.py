@@ -104,6 +104,23 @@ DENSE_FIELD_WEIGHTS = {"title": 0.45, "attributes": 0.30, "category": 0.15, "des
 # keyed by catalog content + model name -- see its module docstring.
 DENSE_CACHE_DIR = os.environ.get("AGENT_SHOPPER_DENSE_CACHE_DIR", "data")
 
+# When true (the default), dense_index.DenseIndex never attempts a network
+# download for the embedding model (local_files_only=True, plus setting
+# HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE -- same mechanism
+# cross_encoder_reranker.py already uses). Unlike the cross-encoder, this
+# model isn't packaged into a local artefact in this repo, so a judging
+# environment that both disables network AND doesn't already have
+# sentence-transformers/all-MiniLM-L6-v2 cached will have the dense route
+# fail to load -- DenseIndex degrades gracefully when that happens (empty
+# field matrices, search() returns [], never crashes Agent() construction),
+# so the session still runs on keyword+vector+category alone rather than
+# failing every session outright. Defaulting to offline-only is still the
+# safer choice: without it, a network-disabled environment doesn't fail
+# fast -- it retries with exponential backoff (observed directly during
+# this project's own offline verification work), which can stall Agent()
+# construction for a long time before ultimately failing anyway.
+DENSE_MODEL_LOCAL_FILES_ONLY = os.environ.get("AGENT_SHOPPER_DENSE_MODEL_LOCAL_ONLY", "1") not in ("", "0", "false", "False")
+
 # --- Pillar I: reranking ---------------------------------------------------
 
 RERANK_CANDIDATE_LIMIT = _env_int("AGENT_SHOPPER_RERANK_LIMIT", 20)
