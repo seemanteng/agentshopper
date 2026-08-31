@@ -272,15 +272,20 @@ a bound against some external limit. The heuristic-only rollback path is
 much faster: 693.2s (≈11.6 minutes) for 200 sessions, ≈46 minutes projected
 for 800.
 
-*(These specific timings predate the dense-route packaging fix directly
-above -- they were measured against an earlier archive build where
-`DenseIndex` resolved its model from the Hugging Face id rather than the
-now-packaged local path. The per-turn dense search cost itself is
-unaffected by that change -- only model *loading* moved from a cache
-lookup to a local-directory load, and both are sub-second -- so these
-numbers are expected to still hold, but they haven't been re-measured
-against the corrected archive yet; treat them as a good estimate pending
-that re-run rather than a bit-exact current figure.)*
+**Re-measured against the corrected archive**: a full 200-session run against
+the actual extracted, dense-model-fixed submission archive (zero
+`AGENT_SHOPPER_*`/`HF_*` environment variables, `HF_HOME` pointed at a
+freshly-created empty directory) reproduced the headline metrics **bit-exactly**
+-- TechnicalScore 0.598867, HitRate@10 0.705, MRR 0.439224, MTTC 5.27, all
+identical to the figures already cited throughout this README -- confirming
+the packaging fix changed nothing about actual eval outcomes, only how the
+model gets loaded. Wall-clock time for that specific run was 6892s (≈114.9
+minutes), well above the 82.5-minute figure above; this was measured while
+this machine was also running unrelated concurrent work (a separate
+diagnostic script, other background tasks) and reflects CPU contention, not
+a real regression in per-turn latency -- the 82.5-minute figure from an
+uncontended run remains the more representative estimate for the
+runtime/800-session-projection numbers above.
 
 **Timeout and size-limit status — resolved.** Originally flagged as three
 open organizer questions; all three are now answered by
