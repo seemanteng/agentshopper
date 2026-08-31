@@ -53,7 +53,9 @@ a real evaluator run, not a separate, looser demo path:
 
 A narration script for a recorded walkthrough of both transcripts plus the
 validation discipline and final metrics is at
-[`docs/video_script.md`](docs/video_script.md).
+[`docs/video_script.md`](docs/video_script.md) (a plain-text,
+teleprompter-friendly rendering of the same script is at
+[`docs/video_script.txt`](docs/video_script.txt)).
 
 Reproduce either with:
 
