@@ -20,6 +20,7 @@ README.md's "what we tried" section for that history.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 def _env_float(name: str, default: float) -> float:
@@ -139,6 +140,66 @@ FORCE_HEURISTIC = os.environ.get("AGENT_SHOPPER_FORCE_HEURISTIC", "") not in (""
 LLM_MODEL_ENV = "AGENT_SHOPPER_RERANK_MODEL"
 LLM_MODEL_FALLBACK = "gpt-4o-mini"
 LLM_MAX_FAILURES_BEFORE_CIRCUIT_BREAK = 2
+
+# --- Frozen cross-encoder semantic reranking (see agent_shopper/
+# cross_encoder_reranker.py) -- entirely local, no paid API, no fine-tuning.
+#
+# Promoted to shipped default: validated by an offline replay gate plus
+# 5-fold CV (scripts/replay_cross_encoder_offline.py, scripts/
+# cv_cross_encoder.py) and a full 200-session confirmation run at alpha=0.30
+# -- TechnicalScore 0.5674->0.5989, HitRate@10 0.675->0.705, MRR 0.410->0.439,
+# MTTC 5.66->5.27, 6 miss->hit / 0 hit->miss (see README.md's "What we
+# tried" and its "Deployment readiness" subsection for the full evidence
+# trail, packaging method, and remaining, unresolved organizer questions
+# around archive-size/bundling limits). Opt out with
+# AGENT_SHOPPER_FROZEN_CROSS_ENCODER=0 (falls back to the plain heuristic,
+# reproducing the 0.5674 baseline) -- see also AGENT_SHOPPER_FORCE_HEURISTIC.
+FROZEN_CROSS_ENCODER_ENABLED = os.environ.get("AGENT_SHOPPER_FROZEN_CROSS_ENCODER", "1") not in ("", "0", "false", "False")
+
+# Module-relative (never CWD-relative) default: the packaged, offline-loadable
+# checkpoint produced by scripts/prepare_cross_encoder_artifact.py. This is
+# cross-encoder/ms-marco-TinyBERT-L-6 @ defbb7d2405cfb2a0f9db418cd8a377c97469552
+# -- the substitute model every validated number above was actually measured
+# with. The originally-specified cross-encoder/ms-marco-MiniLM-L-6-v2
+# reliably crashes this development machine's process with SIGBUS during
+# inference (not a catchable Python exception -- see cross_encoder_reranker.py's
+# module docstring and README.md's "What we tried") and must never be used as
+# an active or fallback default; it is not referenced anywhere in this file.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PACKAGED_CROSS_ENCODER_PATH = _REPO_ROOT / "models" / "cross_encoder" / "ms-marco-TinyBERT-L-6"
+FROZEN_CROSS_ENCODER_MODEL = os.environ.get("AGENT_SHOPPER_CROSS_ENCODER_MODEL", str(_PACKAGED_CROSS_ENCODER_PATH))
+
+# When true (the default), never attempt a network download --
+# local_files_only=True is passed straight through to sentence-transformers'
+# CrossEncoder(...), and cross_encoder_reranker._ensure_loaded additionally
+# sets HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE so indirect network calls
+# (tokenizer/config revalidation) are blocked too, not just the top-level
+# load call. This is what makes the shipped default work with zero
+# judge-provided environment variables and no dependency on any developer's
+# Hugging Face cache -- the packaged directory above is fully self-contained.
+FROZEN_CROSS_ENCODER_LOCAL_FILES_ONLY = os.environ.get("AGENT_SHOPPER_CROSS_ENCODER_LOCAL_ONLY", "1") not in ("", "0", "false", "False")
+
+# Candidate-pool depth the scorer sees: fused top-K unioned with the
+# existing heuristic's own top-10 (see build_candidate_union) -- 100 is the
+# practical pilot depth the Oracle recall-ceiling diagnostic identified
+# (scripts/diagnose_retrieval.py), not the absolute (K=200) ceiling.
+FROZEN_CROSS_ENCODER_DEPTH = _env_int("AGENT_SHOPPER_CROSS_ENCODER_DEPTH", 100)
+FROZEN_CROSS_ENCODER_BATCH_SIZE = _env_int("AGENT_SHOPPER_CROSS_ENCODER_BATCH_SIZE", 32)
+FROZEN_CROSS_ENCODER_MAX_LENGTH = _env_int("AGENT_SHOPPER_CROSS_ENCODER_MAX_LENGTH", 256)
+
+# Weighted-RRF blend weight between the existing heuristic ranking and the
+# semantic ranking (see cross_encoder_reranker.fuse_hybrid_scores) --
+# 0.0 would reproduce the heuristic's own top-10 exactly (and short-circuits
+# before ever loading the model, see FrozenCrossEncoderReranker.rerank).
+# Not a fitted/trained value -- a fixed experiment parameter selected by
+# 5-fold CV (scripts/cv_cross_encoder.py) over a small grid (0.0/0.15/0.30/
+# 0.50), chosen over the numerically-higher alpha=0.50 specifically because
+# 0.30 had zero hit->miss regressions across all 5 folds. See README.md's
+# "What we tried" for the full fold-by-fold numbers.
+FROZEN_CROSS_ENCODER_ALPHA = _env_float("AGENT_SHOPPER_CROSS_ENCODER_ALPHA", 0.30)
+
+# Reuses RRF_K (Pillar I's retrieval-fusion smoothing constant, already 60)
+# rather than a second constant with the same value -- see RRF_K above.
 
 # --- Pillar II: dialog state machine ----------------------------------------
 

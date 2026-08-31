@@ -91,21 +91,27 @@ def should_clarify(pool_size: int, filled_hard_slots: int, turns_remaining: int,
 
 def decide_rerank_engine(
     pool_size: int, turn: int, max_turns: int, llm_available: bool, llm_disabled: bool, do_clarify: bool = False,
-) -> str:
-    """Returns 'heuristic' or 'llm'."""
+) -> tuple[str, str]:
+    """Returns (engine, reason) -- engine is 'heuristic' or 'llm'; reason is
+    which branch decided it ('tight_pool'/'clarify_skip'/'last_turn'/
+    'circuit_breaker'/'no_provider'/'eligible'), read by dialog_policy to
+    populate SessionState.engine_trace for the LLM-invocation-rate
+    breakdown (see scripts/run_llm_benchmark.py)."""
     if pool_size <= TIGHT_POOL_SIZE:
         # Still worth the free, zero-latency heuristic composite (attribute
         # match / rating / price fit) instead of leaving a small pool sorted
         # by raw fused-RRF order alone -- see config.TIGHT_POOL_SIZE.
-        return "heuristic"
+        return "heuristic", "tight_pool"
     if do_clarify:
         # The turn's primary output is a clarifying question, not the
         # ranked list -- don't spend an LLM call on a ranking the shopper's
         # attention isn't going to this turn.
-        return "heuristic"
+        return "heuristic", "clarify_skip"
     if turn >= max_turns:
         # No latency risk on the final turn -- always the fast, free path.
-        return "heuristic"
-    if llm_disabled or not llm_available:
-        return "heuristic"
-    return "llm"
+        return "heuristic", "last_turn"
+    if llm_disabled:
+        return "heuristic", "circuit_breaker"
+    if not llm_available:
+        return "heuristic", "no_provider"
+    return "llm", "eligible"

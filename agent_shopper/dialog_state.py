@@ -37,6 +37,24 @@ class ShownRecord:
 
 
 @dataclass
+class EngineDecision:
+    """One record per turn of what rerank engine actually ran and why --
+    the raw material for the LLM-invocation-rate / failure-reason breakdown
+    a trustworthy LLM-vs-heuristic benchmark needs (see
+    scripts/run_llm_benchmark.py). route_reason mirrors
+    orchestrator.decide_rerank_engine's second return value; llm_outcome/
+    llm_failure_reason are only set when route_reason == "eligible"."""
+
+    turn: int
+    engine: str  # "heuristic" or "llm" -- what actually ran this turn
+    route_reason: str  # tight_pool / clarify_skip / last_turn / circuit_breaker / no_provider / eligible
+    llm_outcome: str | None = None  # None unless route_reason == "eligible"; else "success" or "failed"
+    llm_failure_reason: str | None = None  # LLMUnavailable.cause_type when llm_outcome == "failed"
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+@dataclass
 class SessionState:
     session_id: str
     user_profile: dict
@@ -64,6 +82,10 @@ class SessionState:
     llm_failure_count: int = 0
     llm_disabled: bool = False
 
+    # One EngineDecision per turn (heuristic and LLM alike) -- see
+    # EngineDecision's docstring. Populated by dialog_policy.process_turn.
+    engine_trace: list[EngineDecision] = field(default_factory=list)
+
     def has_overridden(self) -> bool:
         return bool(self.override_events)
 
@@ -90,6 +112,9 @@ class SessionStore:
 
     def get(self, session_id: str) -> SessionState | None:
         return self._sessions.get(session_id)
+
+    def values(self) -> list[SessionState]:
+        return list(self._sessions.values())
 
     def __contains__(self, session_id: str) -> bool:
         return session_id in self._sessions

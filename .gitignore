@@ -24,6 +24,9 @@ ablation_runs.jsonl
 reranker_cv_runs.jsonl
 override_query_strip_cv_runs.jsonl
 override_model_cv_runs.jsonl
+llm_benchmark_runs.jsonl
+llm_rerank_trace_sample.jsonl
+cross_encoder_cv_runs.jsonl
 results_*.json
 data/catalog.jsonl.gz
 data/SHA256SUMS
@@ -31,4 +34,9 @@ data/.embedding_cache/
 data/.dense_cache_*.npz
 data/.ablation_split_seed42.json
 .env.local
+
+# Rebuildable submission archives (scripts/build_submission_archive.py) --
+# not source, duplicate the checkpoint bytes already tracked via Git LFS
+# under models/cross_encoder/.
+submission-*.zip
 

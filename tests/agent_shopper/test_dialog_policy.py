@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from agent_shopper import dialog_policy as dialog_policy_mod
 from agent_shopper.bm25_index import BM25Index
@@ -223,6 +224,14 @@ class ForcedRelaxClarifyTest(unittest.TestCase):
         self.catalog = make_catalog()
         self.bm25 = BM25Index(self.catalog)
         self.tfidf = TfidfIndex(self.catalog)
+        # Cross-encoder reranking is on by default (see config.py) -- this
+        # test exercises the heuristic clarify-relaxation path specifically
+        # and must not trigger a real 256MB model load. See
+        # tests/agent_shopper/test_cross_encoder_reranker.py for the
+        # cross-encoder's own coverage.
+        patcher = patch.object(dialog_policy_mod, "FROZEN_CROSS_ENCODER_ENABLED", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_asks_about_the_hard_marked_slot_instead_of_dropping_it(self) -> None:
         state = _state(SlotSet(
@@ -233,6 +242,39 @@ class ForcedRelaxClarifyTest(unittest.TestCase):
         response = process_turn(self.catalog, self.bm25, self.tfidf, state, "I need to buy something now", turn=1, top_k=5)
         self.assertEqual(response["ask_attribute"], "budget")
         self.assertIn("budget", response["message"].lower())
+
+
+class EngineTraceAndUsageTest(unittest.TestCase):
+    """No API key is configured in the test environment, so every turn here
+    takes the heuristic path -- covers the "usage" dict and
+    SessionState.engine_trace being populated (zeroed/no-LLM-outcome) on a
+    turn that never calls out to an LLM, per dialog_policy.process_turn."""
+
+    def setUp(self) -> None:
+        self.catalog = make_catalog()
+        self.bm25 = BM25Index(self.catalog)
+        self.tfidf = TfidfIndex(self.catalog)
+        # See ForcedRelaxClarifyTest.setUp's comment -- same reasoning.
+        patcher = patch.object(dialog_policy_mod, "FROZEN_CROSS_ENCODER_ENABLED", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_usage_is_zero_on_heuristic_turn(self) -> None:
+        state = _state()
+        response = process_turn(self.catalog, self.bm25, self.tfidf, state, "running shoes", turn=1, top_k=5)
+        self.assertEqual(response["usage"], {"prompt_tokens": 0, "completion_tokens": 0})
+
+    def test_engine_trace_records_one_entry_per_turn(self) -> None:
+        state = _state()
+        process_turn(self.catalog, self.bm25, self.tfidf, state, "running shoes", turn=1, top_k=5)
+        self.assertEqual(len(state.engine_trace), 1)
+        entry = state.engine_trace[0]
+        self.assertEqual(entry.engine, "heuristic")
+        # The fixture catalog has only 8 products, so pool_size is well under
+        # TIGHT_POOL_SIZE regardless of provider availability -- that branch
+        # is checked first in decide_rerank_engine.
+        self.assertEqual(entry.route_reason, "tight_pool")
+        self.assertIsNone(entry.llm_outcome)
 
 
 if __name__ == "__main__":

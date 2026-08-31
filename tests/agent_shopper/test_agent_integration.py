@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from agent_shopper import dialog_policy as dialog_policy_mod
 from agent_shopper.agent import Agent
 from agent_shopper.llm_client import LLMUnavailable
 from tests.agent_shopper.fixtures import write_catalog_file
@@ -25,6 +26,15 @@ class AgentIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.catalog_path = write_catalog_file()
         self.addCleanup(self.catalog_path.unlink, missing_ok=True)
+        # Cross-encoder reranking is on by default (see config.py) -- these
+        # tests exercise the rest of the pipeline (slot merge, override
+        # handling, LLM-failure fallback, turn budget) and must not trigger
+        # a real 256MB model load. See
+        # tests/agent_shopper/test_cross_encoder_reranker.py for the
+        # cross-encoder's own coverage.
+        patcher = patch.object(dialog_policy_mod, "FROZEN_CROSS_ENCODER_ENABLED", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.agent = Agent(self.catalog_path)
 
     def test_reset_then_respond_returns_valid_schema(self) -> None:

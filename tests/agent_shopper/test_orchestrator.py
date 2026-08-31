@@ -134,31 +134,53 @@ class ShouldClarifyTest(unittest.TestCase):
 
 
 class DecideRerankEngineTest(unittest.TestCase):
+    """decide_rerank_engine returns (engine, reason) -- reason is what
+    dialog_policy logs into SessionState.engine_trace for the
+    LLM-invocation-rate breakdown (see scripts/run_llm_benchmark.py)."""
+
     def test_tight_pool_uses_heuristic(self) -> None:
-        self.assertEqual(decide_rerank_engine(5, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False), "heuristic")
+        self.assertEqual(
+            decide_rerank_engine(5, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False),
+            ("heuristic", "tight_pool"),
+        )
 
     def test_last_turn_always_heuristic(self) -> None:
-        self.assertEqual(decide_rerank_engine(50, turn=MAX_TURNS, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False), "heuristic")
+        self.assertEqual(
+            decide_rerank_engine(50, turn=MAX_TURNS, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False),
+            ("heuristic", "last_turn"),
+        )
 
     def test_no_key_falls_back_to_heuristic(self) -> None:
-        self.assertEqual(decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=False, llm_disabled=False), "heuristic")
+        self.assertEqual(
+            decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=False, llm_disabled=False),
+            ("heuristic", "no_provider"),
+        )
 
     def test_circuit_breaker_forces_heuristic(self) -> None:
-        self.assertEqual(decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=True), "heuristic")
+        self.assertEqual(
+            decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=True),
+            ("heuristic", "circuit_breaker"),
+        )
 
     def test_uses_llm_when_available_and_pool_large(self) -> None:
-        self.assertEqual(decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False), "llm")
+        self.assertEqual(
+            decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False),
+            ("llm", "eligible"),
+        )
 
     def test_clarify_turn_forces_heuristic_even_with_llm_available(self) -> None:
         self.assertEqual(
             decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False, do_clarify=True),
-            "heuristic",
+            ("heuristic", "clarify_skip"),
         )
 
     def test_do_clarify_defaults_to_false(self) -> None:
         # Every pre-existing call site (positional args only) must keep
         # getting "llm" here, unchanged -- do_clarify defaults off.
-        self.assertEqual(decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False), "llm")
+        self.assertEqual(
+            decide_rerank_engine(50, turn=1, max_turns=MAX_TURNS, llm_available=True, llm_disabled=False),
+            ("llm", "eligible"),
+        )
 
 
 if __name__ == "__main__":

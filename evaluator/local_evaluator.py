@@ -8,7 +8,9 @@ import statistics
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable
 
+from agent_shopper.dialog_state import SessionState
 from starter.agent import Agent
 
 
@@ -219,7 +221,14 @@ def evaluate(
     catalog_ids: set[str],
     categories: dict[str, list[str]],
     products: dict[str, dict],
+    session_hook: Callable[[dict, SessionState], None] | None = None,
 ) -> dict:
+    """session_hook, if given, is called once per completed sample as
+    session_hook(sample, state) with that session's final SessionState --
+    e.g. to read state.engine_trace for an LLM-invocation-rate/usage
+    breakdown (see scripts/run_llm_benchmark.py, scripts/estimate_llm_cost.py,
+    scripts/llm_rerank_diagnostics.py). None (the default) is a no-op, so
+    this is fully backward-compatible with every existing caller."""
     sessions: list[dict] = []
     total_prompt_tokens = 0
     total_completion_tokens = 0
@@ -274,6 +283,10 @@ def evaluate(
             "best_rank": best_rank,
             "reciprocal_rank": 0.0 if best_rank is None else 1.0 / best_rank,
         })
+        if session_hook is not None:
+            state = agent.sessions.get(session_id)
+            if state is not None:
+                session_hook(sample, state)
 
     overall = metric_summary(sessions)
     efficiency = max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0))

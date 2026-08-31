@@ -9,6 +9,7 @@ same shape, so orchestrator.py never needs to know which one ran.
 
 from __future__ import annotations
 
+import random
 import re
 from typing import Protocol
 
@@ -22,7 +23,7 @@ from agent_shopper.config import (
     REJECTED_ITEM_MIN_SHOWN_TURNS,
     RERANK_CANDIDATE_LIMIT,
 )
-from agent_shopper.llm_client import LLMUnavailable, active_provider, call_structured
+from agent_shopper.llm_client import LLMUnavailable, TokenUsage, active_provider, call_structured
 from agent_shopper.models import Candidate, DistilledContext, Product
 
 
@@ -237,17 +238,39 @@ def _reconcile(candidates: list[Candidate], judgments: list[Judgment]) -> list[C
 
 
 class LLMReranker:
-    def __init__(self, fallback: Reranker | None = None) -> None:
+    def __init__(self, fallback: Reranker | None = None, shuffle_seed: int | None = None) -> None:
         self.fallback = fallback or HeuristicReranker()
         # Set by every rerank() call -- dialog_policy reads this to drive the
         # LLM circuit breaker (state.llm_failure_count / state.llm_disabled).
         self.last_call_used_llm = False
+        # Diagnostic-only fields, set by every rerank() call regardless of
+        # outcome -- production code never reads these; scripts/
+        # llm_rerank_diagnostics.py (position-bias / prompt-injection
+        # spot-checks) does, via a capturing subclass.
+        self.last_usage = TokenUsage()
+        self.last_failure_reason: str | None = None
+        self.last_payload: dict | None = None
+        self.last_response_judgments: list[dict] | None = None
+        # Diagnostic-only: when set, the candidate slice sent to the LLM is
+        # permuted (deterministically, by this seed) before being indexed
+        # into the prompt, to measure the LLM's sensitivity to candidate
+        # order independent of content. Never set by production code --
+        # inert (None) on every live per-turn call.
+        self.shuffle_seed = shuffle_seed
 
     def rerank(self, ctx: DistilledContext, candidates: list[Candidate], top_k: int) -> list[Candidate]:
+        self.last_usage = TokenUsage()
+        self.last_failure_reason = None
+        self.last_payload = None
+        self.last_response_judgments = None
         if not candidates:
             self.last_call_used_llm = False
             return []
         slice_ = candidates[:RERANK_CANDIDATE_LIMIT]
+        if self.shuffle_seed is not None:
+            order = list(range(len(slice_)))
+            random.Random(self.shuffle_seed).shuffle(order)
+            slice_ = [slice_[i] for i in order]
         shown_counts = ctx.session.shown_asin_counts
         payload = {
             "shopper_context": {
@@ -262,11 +285,15 @@ class LLMReranker:
             ],
         }
         try:
-            response = call_structured(_LLM_SYSTEM_PROMPT, payload, RerankResponse)
-        except LLMUnavailable:
+            response, usage = call_structured(_LLM_SYSTEM_PROMPT, payload, RerankResponse)
+        except LLMUnavailable as exc:
             self.last_call_used_llm = False
+            self.last_failure_reason = exc.cause_type or "unknown"
             return self.fallback.rerank(ctx, candidates, top_k)
         self.last_call_used_llm = True
+        self.last_usage = usage
+        self.last_payload = payload
+        self.last_response_judgments = [j.model_dump() for j in response.judgments]
         reranked_slice = _reconcile(slice_, response.judgments)
         rest = candidates[RERANK_CANDIDATE_LIMIT:]
         return (reranked_slice + rest)[:top_k]

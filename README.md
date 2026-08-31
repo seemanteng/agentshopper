@@ -21,7 +21,7 @@ The brief calls for four pillars; each maps to a small set of modules:
 
 | Pillar | What it means here | Modules |
 |---|---|---|
-| **I. Intent Routing & Hybrid Pipeline** | Every turn is scored on two separate signals — how decisive the shopper's *language* is, and how *specified* the request already is from accumulated slots — combined with hysteresis so the track doesn't flip on a marginal score change. Buying hard-gates retrieval to a structured category/attribute/price filter once enough slots are known; a slot stated with hard-requirement language ("no more than $50", "must be leather") is enforced as an exact filter immediately, even on the browsing track. Three routes (keyword/BM25, structured category filter, TF-IDF vector) are fused by weighted Reciprocal Rank Fusion, then reranked by a pluggable heuristic-or-LLM stage that treats catalog text as untrusted data. | [`intent.py`](agent_shopper/intent.py), [`bm25_index.py`](agent_shopper/bm25_index.py), [`tfidf_index.py`](agent_shopper/tfidf_index.py), [`category_index.py`](agent_shopper/category_index.py), [`retrieval.py`](agent_shopper/retrieval.py), [`reranker.py`](agent_shopper/reranker.py) |
+| **I. Intent Routing & Hybrid Pipeline** | Every turn is scored on two separate signals — how decisive the shopper's *language* is, and how *specified* the request already is from accumulated slots — combined with hysteresis so the track doesn't flip on a marginal score change. Buying hard-gates retrieval to a structured category/attribute/price filter once enough slots are known; a slot stated with hard-requirement language ("no more than $50", "must be leather") is enforced as an exact filter immediately, even on the browsing track. Three routes (keyword/BM25, structured category filter, TF-IDF vector) are fused by weighted Reciprocal Rank Fusion, then reranked by a pluggable heuristic-or-LLM stage that treats catalog text as untrusted data. A third reranking stage — a frozen, local, pointwise cross-encoder fused with the heuristic by weighted RRF over a hybrid candidate union — is enabled by default as of the "Deployment readiness" promotion below; see "What we tried" for the validation evidence. | [`intent.py`](agent_shopper/intent.py), [`bm25_index.py`](agent_shopper/bm25_index.py), [`tfidf_index.py`](agent_shopper/tfidf_index.py), [`category_index.py`](agent_shopper/category_index.py), [`retrieval.py`](agent_shopper/retrieval.py), [`reranker.py`](agent_shopper/reranker.py), [`cross_encoder_reranker.py`](agent_shopper/cross_encoder_reranker.py) |
 | **II. Multi-Turn Scenario Evolution** | A `SessionState` accumulates slots (category/material/color/size/style/brand/budget/feature/use_case) turn by turn, distinguishing plain Information Accumulation from an Intent Override (explicit contradiction language, a conflicting category, or a non-overlapping budget) that erases and rewrites the affected slots. A category override only clears style/feature when the new category is in a different department (jewelry/footwear/apparel/accessories/bags) — a same-department swap ("shoes"→"boots") keeps them, and a cleared attribute is reopened for clarification. Slots stated with hard-requirement language are marked as such, so relaxing an over-constrained filter prefers dropping a soft preference first and asks the shopper which requirement to adjust only once nothing soft is left. A letter clothing size and a numeric shoe/waist size are never folded into one OR-accumulated value. When the candidate pool is over-general, retrieval is cut off in favor of an information-gain-selected clarifying question — while still returning a best-effort recommendation the same turn. | [`slots.py`](agent_shopper/slots.py), [`dialog_state.py`](agent_shopper/dialog_state.py), [`dialog_policy.py`](agent_shopper/dialog_policy.py) |
 | **III. Dynamic Context Programming** | The harness's `reset()` `user_profile` is distilled once into soft priors (a decisiveness prior, a preference-tag boost, a rating-floor hint) — this *is* the "long-term profile" signal, since each session is an isolated single user. Session slots and shown-item history are distilled every turn into a bounded, token-cheap representation, which also drives a soft repeat-penalty against re-surfacing an already-shown, unconverted item. A small decision-table orchestrator re-selects routing/reranking/clarification strategy at runtime based on turn budget, pool size, and progress — skipping the LLM call when the turn's output is a clarifying question anyway or turns are running out, stopping clarification only once no untried attribute is left worth asking about, and relaxing an over-constrained filter when stuck. | [`context.py`](agent_shopper/context.py), [`orchestrator.py`](agent_shopper/orchestrator.py) |
 | **IV. Evaluation** | Scored against the official `evaluator/local_evaluator.py` (Hit Rate@10, MRR, MTTC, TechnicalScore) on the 200-session public dev set. Every tunable in `config.py` was validated this way before being locked in — see "What we tried" below for the specific before/after numbers. | [`scripts/run_local_eval.py`](scripts/run_local_eval.py) |
@@ -39,6 +39,212 @@ LLM judge call (`reranker.LLMReranker`), with automatic fallback to the
 heuristic path on any failure, a circuit breaker after repeated failures,
 and the last turn always using the fast local path regardless. Force the
 free path explicitly with `AGENT_SHOPPER_FORCE_HEURISTIC=1`.
+
+### Frozen cross-encoder reranking: validated, shipped as the default
+
+Separate from the paid LLM path above: `agent_shopper/cross_encoder_reranker.py`
+adds a small, entirely local, frozen (no fine-tuning, no gradient updates —
+`.eval()` + `requires_grad_(False)` on every parameter, inference under
+`torch.inference_mode()`) pointwise cross-encoder, fused with the existing
+heuristic by weighted Reciprocal Rank Fusion over a K=100 hybrid candidate
+union (fused top-100 ∪ the heuristic's own top-10, so the heuristic's
+existing hits can never be dropped from the candidate set the scorer sees).
+Unlike the LLM reranker, it scores each query-candidate pair independently
+(no candidate ever sees another's text), which structurally avoids the
+listwise LLM reranker's diagnosed candidate-order sensitivity (see "What we
+tried"). Enabled by default (`AGENT_SHOPPER_FROZEN_CROSS_ENCODER=0` to opt
+out and reproduce the 0.5674 heuristic-only baseline), loading a packaged,
+self-contained checkpoint from `models/cross_encoder/ms-marco-TinyBERT-L-6/`
+fully offline — a judge's run needs zero `AGENT_SHOPPER_*` environment
+variables and no dependency on any developer's Hugging Face cache. See
+"Deployment readiness" below for the packaging method, offline verification,
+latency/memory numbers, and the organizer questions that remain open.
+
+### Deployment readiness
+
+**Validated substitute model identity.** `cross-encoder/ms-marco-TinyBERT-L-6`
+@ revision `defbb7d2405cfb2a0f9db418cd8a377c97469552` (base architecture
+`nreimers/TinyBERT_L-6_H-768_v2`, MS MARCO Passage Ranking fine-tune,
+Apache-2.0 licensed). This is the exact checkpoint every validated number in
+this README's cross-encoder entry was measured with, not an inference from
+the originally-intended model's name.
+
+**Why the originally intended model was rejected.** `cross-encoder/ms-marco-MiniLM-L-6-v2`
+reliably crashes this development machine's process with SIGBUS during
+inference — an OS-level signal, not a catchable Python exception, so no
+in-process fallback design can save it (root-caused: same-shaped random-weight
+BERT and this project's own `all-MiniLM-L6-v2` dense encoder both work,
+`ms-marco-MiniLM-L-4-v2` also crashes, `ms-marco-TinyBERT-L-6` and
+`ms-marco-electra-base` don't — see the earlier "What we tried" entry for the
+full trace). `cross-encoder/ms-marco-MiniLM-L-6-v2` does not appear anywhere
+in `agent_shopper/config.py` as an active or fallback default.
+
+**Frozen, not fine-tuned.** No gradient updates, no optimizer, no LoRA/
+adapter/projection-head training were performed by this project on this or
+any other checkpoint. `FrozenCrossEncoderScorer._ensure_loaded` calls
+`.eval()` and sets every parameter's `requires_grad_(False)`; `.score()`
+runs inference under `torch.inference_mode()` — enforced by
+`tests/agent_shopper/test_cross_encoder_reranker.py`'s
+`FrozenCrossEncoderScorerFrozenContractTest`, which asserts this against a
+real `torch.nn.Module` without downloading the real checkpoint.
+
+**Model size.** 256.3 MB (267,839,500-byte `model.safetensors` plus five
+small tokenizer/config files, 268,784,478 bytes total) — checksummed per-file
+(SHA-256) and by an overall deterministic tree hash in
+`models/cross_encoder/ms-marco-TinyBERT-L-6/manifest.json`. Note:
+`model.safetensors` alone (255 MB) is over GitHub's own 100 MB hard
+per-file push-block limit — see "Packaging and remaining blockers" below.
+
+**Offline packaging method.** `scripts/prepare_cross_encoder_artifact.py`
+copies real file bytes (never symlinks into any developer's Hugging Face
+cache) from the local cache snapshot at the pinned revision, offline
+(`local_files_only=True`, refuses to download), into
+`models/cross_encoder/ms-marco-TinyBERT-L-6/` — a path resolved in
+`agent_shopper/config.py` via `Path(__file__).resolve().parent.parent`,
+i.e. relative to the repository/module location, never the current working
+directory. `agent_shopper/cross_encoder_reranker.py`'s `_ensure_loaded` sets
+`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1` itself (via `setdefault`, never
+overriding a value already present) whenever `local_files_only=True` — so a
+judge's run needs **zero** `AGENT_SHOPPER_*` or `HF_*` environment variables
+to load the exact validated checkpoint fully offline. Reproduce with:
+
+```bash
+python3 scripts/prepare_cross_encoder_artifact.py
+```
+
+**Stability.** `scripts/smoke_test_cross_encoder_subprocess.py` isolates
+every real model load/score call in a child process (a native crash can't be
+caught by ordinary Python exception handling, so the parent never trusts
+in-process error handling alone). Against the packaged checkpoint: 5/5
+independent cold-load subprocesses clean (load time 0.14–0.20s each, zero
+signal terminations), 300 warm scoring batches (100 repeats × sizes 20/50/100)
+all clean, and candidate-order invariance (original vs. reversed order) PASS
+at all three sizes.
+
+**Cold-load and warm inference latency.** Measured on this machine (Apple
+M1, 8 cores, 8 GB RAM, CPU only — no CUDA/MPS available):
+
+| Stage | Time |
+|---|---|
+| `import agent_shopper.cross_encoder_reranker` | 2.04s |
+| `import torch` | 1.60s |
+| `import sentence_transformers` | 3.93s |
+| Cold model load (`CrossEncoder(...)` + `.eval()` + `requires_grad_(False)`) | 0.23s |
+| First inference call (5 candidates, includes lazy load) | 0.98s |
+| Warm inference, 5 candidates | 0.16s |
+| Peak RSS during load + 100-candidate score | ≈644 MB |
+
+Warm per-turn scoring latency by candidate-batch size (100 repeats each, own
+synthetic fixture data, steady-state after model warm-up):
+
+| Candidates | Mean | p50 | p95 | Max |
+|---|---|---|---|---|
+| 20 | 0.285s | 0.274s | 0.391s | 0.453s |
+| 50 | 0.815s | 0.812s | 1.099s | 1.514s |
+| 100 | 1.486s | 1.428s | 1.820s | 3.036s |
+
+For comparison, the original per-turn latency measured against real,
+diverse session text (`scripts/replay_cross_encoder_offline.py`'s Phase 7
+run, up to 110 real candidates per union): mean 4.221s, p50 4.284s, p95
+4.535s — higher than the synthetic-batch numbers above, likely because real
+per-turn text varies every call (no benefit from repeated-identical-batch
+warm paths) — reported as the more representative number for session
+overhead below.
+
+10-turn session overhead (using the 26.2% eligible-turn proportion Phase 7
+measured — 259 of 989 scored turns had the target reachable in the K=100
+union):
+
+- Best case (0 eligible turns): +0s
+- Typical case (~2.6 eligible turns): +~11s
+- Worst case (10/10 eligible turns): +~42–45s
+
+**Full-evaluation runtime and 800-session projection.** The complete
+200-session public-set evaluation, run against the extracted submission
+archive itself (not the working tree — see below), with the cross-encoder
+enabled by default and zero cross-encoder-specific environment variables:
+**4948.1s (≈82.5 minutes)**. Linear ×4 projection for the private 800-session
+set: **≈19,792s (≈5.5 hours)**, sequential, single-process — this is a
+straight-line extrapolation, not accounting for any judging-side parallelism
+or per-session timeout the organizer might impose (unknown, see below). The
+heuristic-only rollback path is much faster: 693.2s (≈11.6 minutes) for 200
+sessions, ≈46 minutes projected for 800.
+
+**Timeout and size-limit status.** `docs/competition_specification.md`,
+`docs/submission_rules.md`, `docs/evaluation_config.json`, and
+`docs/agent_api_contract.json` were read in full. None specify a numeric
+per-call timeout, session timeout, or submission archive-size limit —
+`submission_rules.md` only states the organizer "reserves the right to run
+your submission under CPU, memory, timeout, and network restrictions"
+without giving values. Separately, and independent of any organizer limit:
+GitHub's own hard per-file push-block limit is 100 MB, and this checkpoint's
+`model.safetensors` alone is 255 MB — a normal `git push` will reject it
+outright without Git LFS. Whether checkpoint bundling or Git LFS is accepted
+for this competition is not addressed by any of the four documents above.
+
+**Exact organizer questions still open:**
+1. What is the per-call and/or per-session execution timeout?
+2. What is the submission archive-size limit, if any?
+3. May a local model checkpoint be bundled in the submission (via Git LFS,
+   a release artefact, or another mechanism), or must the agent run without
+   one?
+
+**Packaging and remaining blockers.** Two submission archives were built
+via `scripts/build_submission_archive.py` from an explicit file allowlist
+(not "everything except X"):
+
+| Archive | Size | Default configuration |
+|---|---|---|
+| `submission-cross-encoder.zip` | 249,105,223 bytes (237.57 MB) | Cross-encoder enabled, α=0.30, K=100, packaged TinyBERT checkpoint included |
+| `submission-baseline.zip` | 92,007 bytes (0.09 MB) | Cross-encoder disabled in the staged config copy — rollback artefact, reproduces the 0.5674 heuristic baseline |
+
+Both were independently verified by **extracting them into a fresh temporary
+directory and running every check exclusively against the extracted copy**
+(never the working tree): the full 200-session evaluation for both variants,
+and a dedicated zero-environment-variable, network-blocked, real-Hugging-Face-cache-independent-for-its-own-checkpoint
+diagnostic run (see "Whether the cross-encoder is submission-default" below).
+Neither archive has been committed, staged, or pushed — the 255 MB
+checkpoint's git-tracking mechanism (plain commit vs. Git LFS vs. a separate
+release artefact) is exactly the unresolved bundling-permission question
+above, left for a deliberate decision rather than picked automatically.
+
+**A related, separate finding (not part of this promotion, flagged for
+awareness):** the pre-existing dense-retrieval route
+(`agent_shopper/dense_index.py`, `config.DENSE_MODEL_NAME` =
+`sentence-transformers/all-MiniLM-L6-v2`) participates in every turn's
+retrieval and does **not** pass `local_files_only=True` or set any offline
+environment variable itself — unlike the cross-encoder, it would attempt a
+real network call in a network-disabled judging environment unless one is
+set externally. This is out of this task's scope ("promote the already-
+validated cross-encoder path," not a full pipeline offline-readiness audit)
+and was not modified, but is worth a follow-up given `submission_rules.md`'s
+"official scoring may run with network disabled" language.
+
+**Submission default vs. experimental.** The frozen cross-encoder is now the
+**submission default** (`AGENT_SHOPPER_FROZEN_CROSS_ENCODER` defaults to
+enabled; opt out with `AGENT_SHOPPER_FROZEN_CROSS_ENCODER=0` to reproduce
+the 0.5674 heuristic-only baseline exactly — confirmed via a fresh full
+200-session run of `submission-baseline.zip`, bit-identical to the
+`post-revert-confirm` reference to 6 decimal places on every headline
+metric). This is **not** the same as calling it "deployment-ready": every
+technical gate below passed, but the three organizer questions above remain
+open, so this README does not claim the packaging is certified against
+official submission-size or timeout limits — that determination needs an
+organizer answer.
+
+**Reproduction command** (exact validated configuration, zero cross-encoder-
+specific environment variables required — shown here explicitly for
+clarity, not because they're needed):
+
+```bash
+python3 scripts/prepare_cross_encoder_artifact.py   # once, to (re)build models/cross_encoder/ms-marco-TinyBERT-L-6/
+python3 scripts/run_local_eval.py --label "packaged-offline-cross-encoder-alpha-030"
+```
+
+Expected result (reproduced bit-exactly against the extracted submission
+archive in a zero-`AGENT_SHOPPER_*`-env-var, network-blocked run): HitRate@10
+0.705, MRR 0.439224, MTTC 5.27, TechnicalScore 0.598867, 6 miss→hit / 0
+hit→miss versus the heuristic baseline, ≤10 recommendations every turn.
 
 ## Setup and installation
 
@@ -119,9 +325,14 @@ see the current numbers as the code evolves — they're logged to
 logged history never does.
 
 The LLM-upgraded reranker path (`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` set,
-`AGENT_SHOPPER_FORCE_HEURISTIC` unset) hasn't been benchmarked here since it
-costs real API calls across 200 sessions x up to 10 turns; run it yourself
-to compare.
+`AGENT_SHOPPER_FORCE_HEURISTIC` unset) is now benchmarked (see "What we
+tried" below, `scripts/run_llm_benchmark.py`) — it's a clean regression
+versus the shipped heuristic reranker (TechnicalScore 0.5674→0.5301 mean of
+3 runs), root-caused to severe candidate-order sensitivity rather than
+prompt injection. The heuristic path stays the default; the LLM path remains
+available and gets a fresh, cheap (<$1 total) benchmark run any time via
+`scripts/estimate_llm_cost.py` then `scripts/run_llm_benchmark.py --runs 3
+--baseline`.
 
 ### What we tried (and the eval evidence behind what shipped)
 
@@ -387,6 +598,203 @@ once a comparison was decided. In order of impact:
   confirmed win on the sessions they targeted. `public_0068` ("Imported")
   and 3 other sessions remain unextracted on purpose -- see the code
   comment on `slots.MATERIALS`.
+- **Clearing stale point-constraint slots on an unattributed override**
+  (third attempt at the `intent_override` extraction-gap problem above, this
+  time touching no vocabulary at all): when contradiction language fires but
+  `extract_slots()` returns nothing this turn (5/30 sessions:
+  `public_0003/0023/0038/0068/0186`), the hypothesis was that the
+  pre-override slot value survives stale and permanently excludes the true
+  target from a gated buying-track pool (`retrieval.retrieve`'s exact
+  AND-filter). The fix cleared every currently-droppable point-constraint
+  slot (reusing `orchestrator.droppable_slots_by_tier`, never `category`)
+  whenever this fired, relying on the override message's own words already
+  being tokenized into that turn's `query_text` regardless
+  (`context.build_query_text` always includes the raw message). **Bit-
+  identical eval result on every metric and every scenario_type** --
+  traced turn-by-turn (not just the aggregate number) before concluding
+  this: 4 of the 5 candidate sessions already hit on turn 1, before the
+  override turn was ever reached; the remaining one (`public_0023`) is on
+  the **browsing** track with only `use_case` filled -- browsing never
+  gates to an exact category filter, so there was no stale hard filter to
+  break in the first place, and manually clearing it (confirmed by a
+  one-off patched trace) still didn't produce a hit -- that session's miss
+  is an unrelated BM25/dense recall failure. The specific mechanism this
+  targeted (stale slot + gated hard filter after an unattributed override)
+  provably doesn't co-occur anywhere in the 200-session public set. Reverted
+  in full rather than kept as an unproven, zero-measured-effect code path,
+  per this project's standing rule -- even though it was provably harmless
+  (every other override path is bit-for-bit untouched) and may still matter
+  on the hidden 800-session set's different session mix, keeping unproven
+  behavior around isn't this project's convention. Worth retrying if a
+  future diagnostic finds an actual gated-buying-track session where an
+  unattributed override's stale slot demonstrably blocks the target.
+- **LLM reranker benchmark** (`gpt-4o-mini` via `OPENAI_API_KEY`,
+  `scripts/run_llm_benchmark.py`): the previously-unbenchmarked LLM path
+  (see "LLM usage" above) turns out to be a clean, repeatable *regression*
+  against the shipped heuristic reranker, not the semantic-judgment upgrade
+  it was hoped to be. 3 full 200-session runs (needed because, unlike every
+  other change in this section, the LLM path is non-deterministic) plus one
+  heuristic-only baseline: TechnicalScore 0.5674 -> 0.5301 mean of 3 runs
+  (stdev 0.0021, range 0.5277-0.5313 -- the run-to-run spread is ~18x
+  smaller than the gap to heuristic, so this is a real effect, not noise),
+  HitRate@10 0.6750->0.6317, MRR 0.4103->0.3726, MTTC 5.66->5.88. Every
+  scenario_type regressed; `intent_override` -- the track semantic judgment
+  was hoped to help most, per this conversation's own reasoning about where
+  an LLM's contextual understanding could beat hand-engineered features --
+  lost the most (MRR 0.3678->0.2580, HitRate@10 0.5333->0.4889). Only
+  ~24% of turns are actually LLM-eligible overall (route breakdown: 69%
+  `clarify_skip`, 24% `eligible`, 7% `last_turn`, <1% `tight_pool` --
+  `scripts/estimate_llm_cost.py`), so the loss is concentrated in real LLM
+  judgments, not diluted by the heuristic fallback majority.
+
+  Root-caused with `scripts/llm_rerank_diagnostics.py`'s two checks, run
+  against `intent_override` sessions specifically (the biggest loser, and
+  the track this project's own prior work already flagged as most sensitive
+  to context/prompt construction -- see the override-related entries
+  above): **severe candidate-order sensitivity, not prompt injection**.
+  Replaying 40 real LLM calls with candidates reordered (`--position-bias`)
+  flipped the top pick 92.5% of the time -- but so a stochasticity control
+  matters here: replaying the *same* (unshuffled) order twice already flips
+  30.0% of the time on its own, since `gpt-4o-mini` is called with no
+  temperature/seed pinning. The attributable order effect is the difference,
+  +62.5 percentage points -- reordering alone, holding content fixed,
+  changes the model's answer most of the time. Candidates reach the LLM in
+  fused-RRF-score order (`reranker.py`'s `RERANK_CANDIDATE_LIMIT` slice), so
+  this is a live, reproducible failure mode of the shipped prompt
+  construction, not a one-off. Separately, a manual skim of a 57-call trace
+  sample (`--dump-trace`, weighted toward `intent_override`) found no sign
+  of prompt-injection susceptibility -- `relevance_score` judgments tracked
+  genuine title/feature/description content, not marketing-copy imperatives
+  in the (explicitly untrusted-by-instruction) candidate text.
+
+  Total cost across the cost estimate, all 3 benchmark runs, and both
+  diagnostics: well under $1. The LLM reranker remains available
+  (`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` set, `AGENT_SHOPPER_FORCE_HEURISTIC`
+  unset) but the heuristic path stays the shipped default. The natural next
+  step, if this is revisited, is an order-robustness fix before anything
+  else -- e.g. averaging judgments across a couple of shuffled orderings, or
+  moving from listwise to pairwise/pointwise scoring -- since the current
+  regression looks driven almost entirely by this one mechanism rather than
+  the model's underlying judgment quality.
+
+- **Frozen pointwise cross-encoder reranking pilot** (`agent_shopper/
+  cross_encoder_reranker.py`, `scripts/replay_cross_encoder_offline.py`,
+  `scripts/cv_cross_encoder.py`): motivated by `scripts/diagnose_retrieval.py`'s
+  Oracle recall-ceiling diagnostic, which found 30 of the 65 current misses
+  had their target within the fused top-100 pool (Hybrid-Union Oracle
+  HitRate@10 82.5% at K=100 vs. the 67.5% shipped baseline) but that
+  replacing the heuristic outright would exclude 8 sessions it currently
+  hits from beyond position 100 in the raw fused order — pointing at a
+  hybrid addition, not a replacement. Built as a frozen, local, pointwise
+  scorer specifically to avoid the LLM reranker's diagnosed failure mode
+  (candidate-order sensitivity from listwise judging, see that entry below)
+  — this scores each query-candidate pair independently and never sees
+  another candidate's text, and candidate-order invariance is directly unit-
+  and integration-tested (including a real-model spot check, not just
+  fake-scorer logic tests).
+
+  **Environment-blocking finding, not a code bug**: the originally-specified
+  `cross-encoder/ms-marco-MiniLM-L-6-v2` reliably crashes this development
+  machine's process with SIGBUS during inference — not a catchable Python
+  exception, so no fallback design can save it. Root-caused before writing
+  around it: rules out sandbox restrictions, thread/BLAS config, SDPA vs.
+  eager attention, mmap loading, and checkpoint corruption (safetensors file
+  verified intact, no NaN/Inf in any of its 106 tensors, vocab/embedding
+  sizes match). Isolated by comparison — a random-weight BERT of the same
+  shape works; the project's own existing dense encoder
+  `sentence-transformers/all-MiniLM-L6-v2` (**identical config**: 6 layers,
+  384 hidden, 12 heads) works; `cross-encoder/ms-marco-MiniLM-L-4-v2` (same
+  family) also crashes; `cross-encoder/ms-marco-TinyBERT-L-6` and
+  `cross-encoder/ms-marco-electra-base` (different architectures) don't —
+  a real, reproducible numerical/BLAS-level issue specific to this
+  checkpoint's weight values on this torch 2.11.0 build, not something
+  application code can catch or fix. `AGENT_SHOPPER_CROSS_ENCODER_MODEL`
+  stays defaulted to the originally-specified `ms-marco-MiniLM-L-6-v2`; every
+  number below was measured with `cross-encoder/ms-marco-TinyBERT-L-6`
+  (verified working, same MS MARCO training data, 6 layers/768 hidden — a
+  larger, slower substitute) via that override, not the default.
+
+  **Phase 7 (offline replay, real model, full 200-session public set)**:
+  989 scored turns, 259 with the target reachable in the K=100 hybrid union.
+  Gate: **PASS**. `alpha=0.0` reproduced the heuristic baseline exactly
+  (sanity check). `alpha=0.30`: 25 top-10 gains / 2 losses (net +23), mean
+  reciprocal-rank delta +0.060, positive or flat in every scenario_type,
+  candidate-order invariance PASS on a 20-turn real-model spot check.
+
+  **Phase 8 (interactive 5-fold CV, stratified by scenario_type, seed=42)**:
+  all three nonzero alphas cleared the adoption bar (5/5 folds non-negative,
+  no severe intent_override/boundary regression). `alpha=0.30`: mean
+  TechnicalScore delta +0.0315, **zero hit→miss flips across all 5 folds**
+  (6 flips, all upward). `alpha=0.50`: mean delta +0.0378 (numerically
+  highest) but 3 real hit→miss regressions against 9 gains, with its extra
+  gain concentrated in `buying` at the cost of giving back `intent_override`'s
+  improvement. `alpha=0.30` chosen over the numerically-higher `alpha=0.50`
+  for exactly this reason — a clean, broad, zero-regression win over a
+  marginally-higher but noisier one, matching this project's standing
+  preference throughout this section.
+
+  **Phase 9 (full 200-session confirmation, `alpha=0.30`)**: HitRate@10
+  0.675→**0.705** (+6 sessions), MRR 0.410→**0.439**, MTTC 5.66→**5.27**,
+  TechnicalScore 0.5674→**0.5989** (+0.0315 — matching the CV's mean
+  prediction almost exactly, a meaningful internal-consistency check against
+  the CV result being fold-partition noise). Session-level diff: 6 miss→hit
+  (`public_0002` intent_override, `public_0005`/`0058`/`0107` buying,
+  `public_0059`/`0115` browsing), **0 hit→miss** (confirms none of the 8
+  baseline hits the Oracle diagnostic flagged as originating below fused
+  rank 100 were lost), 46 sessions with an improved (lower) rank, 27 with a
+  regressed-but-still-hit rank, 15 earlier first-hit turns vs. 2 later.
+  Scenario breakdown matches the CV's aggregate prediction almost exactly:
+  buying 0.713→0.750, browsing 0.688→0.713, intent_override 0.533→0.567,
+  boundary unchanged at 0.700 (n=10, no signal either way, consistent with
+  the Oracle diagnostic's own finding there).
+
+  **Latency/packaging** (substitute model; the intended smaller MiniLM
+  would likely be faster): per-turn scoring (up to 110 candidates) mean
+  4.221s / p50 4.284s / p95 4.535s cold (Phase 7); a real 10-turn session
+  would add roughly 10-40s of total latency, not the 40-75 minutes the
+  batch CV/offline runs took evaluating hundreds of simulated sessions.
+  Checkpoint size: `ms-marco-TinyBERT-L-6` ≈256MB on disk vs. the intended
+  `ms-marco-MiniLM-L-6-v2` ≈88MB — not vendored in this repository; for
+  network-free judging, download once and point
+  `AGENT_SHOPPER_CROSS_ENCODER_MODEL` at the local directory with
+  `AGENT_SHOPPER_CROSS_ENCODER_LOCAL_ONLY=1` (`local_files_only=True`,
+  never attempts a download).
+
+  **Original verdict (superseded, kept for the record): kept as an explicit,
+  off-by-default experimental pilot, not shipped enabled.** The CV/
+  confirmation evidence for the *mechanism* (frozen pointwise scorer +
+  hybrid-union RRF fusion) was genuinely strong and internally consistent —
+  but it was only validated against a heavier substitute model, not the
+  originally-specified checkpoint, because that checkpoint is unable to run
+  at all on this development machine for reasons that remain unresolved.
+  Shipping the untested default (`ms-marco-MiniLM-L-6-v2`) enabled by
+  default would risk the exact same crash in an unknown judging environment;
+  shipping the validated substitute enabled by default without first
+  packaging and offline-verifying it would mean silently deploying a
+  3x-larger checkpoint and ~4s/turn of added latency nobody explicitly
+  signed off on for production, with no guarantee it would even load without
+  a developer's Hugging Face cache present.
+
+  **Updated verdict: promoted to the shipped default.** Once the substitute
+  checkpoint was packaged into a self-contained, checksummed local artefact
+  (`models/cross_encoder/ms-marco-TinyBERT-L-6/`) and every deployment gate
+  below was independently re-verified — offline loading with zero
+  `AGENT_SHOPPER_*` environment variables, no dependency on any developer's
+  cache, 5/5 subprocess cold-load tests clean with zero signal terminations,
+  candidate-order invariance against the packaged checkpoint, and a full
+  200-session reproduction from a network-blocked, freshly-extracted copy of
+  the submission archive itself (not just the working tree) — the remaining
+  objection (packaging risk) was resolved rather than merely accepted. See
+  the "Deployment readiness" subsection immediately below for the complete
+  evidence trail, exact numbers, and the organizer questions (archive-size
+  limit, checkpoint-bundling/Git-LFS permission, numeric timeout) that
+  remain genuinely unresolved and are reported as open blockers rather than
+  silently assumed. Both the config flag and every re-validation script
+  (`scripts/replay_cross_encoder_offline.py`, `scripts/cv_cross_encoder.py`,
+  `scripts/prepare_cross_encoder_artifact.py`,
+  `scripts/smoke_test_cross_encoder_subprocess.py`,
+  `scripts/build_submission_archive.py`) are kept, fully tested, and
+  documented.
 
 ## Development tools, APIs, libraries, and data
 

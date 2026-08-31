@@ -1,0 +1,33 @@
+Model: cross-encoder/ms-marco-TinyBERT-L-6
+Revision (commit hash): defbb7d2405cfb2a0f9db418cd8a377c97469552
+Source: https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L-6
+
+License: Apache License, Version 2.0 (SPDX: Apache-2.0)
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+Attribution:
+
+This checkpoint is a frozen, pre-trained pointwise cross-encoder for the
+MS MARCO Passage Ranking task, published by the sentence-transformers /
+cross-encoder project. It builds on the base architecture
+"nreimers/TinyBERT_L-6_H-768_v2" (6-layer, 768-hidden BertForSequenceClassification)
+and was fine-tuned by the model publisher on the "sentence-transformers/msmarco"
+training data (see the model card at the Source URL above for training details).
+
+This model is used here strictly frozen / inference-only -- no gradient
+updates, no fine-tuning, no further training was performed by this project
+(see agent_shopper/cross_encoder_reranker.py's module docstring). Weight
+files are copied byte-for-byte from the publisher's checkpoint; see
+manifest.json in this directory for per-file SHA-256 checksums and the
+overall deterministic tree hash.

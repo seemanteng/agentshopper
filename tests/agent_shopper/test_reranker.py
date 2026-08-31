@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from agent_shopper.config import HEURISTIC_RERANK_WEIGHTS as _HEURISTIC_RERANK_WEIGHTS
 from agent_shopper.context import distill_profile, distill_session
-from agent_shopper.llm_client import LLMUnavailable
+from agent_shopper.llm_client import LLMUnavailable, TokenUsage
 from agent_shopper.models import Candidate, DistilledContext, DistilledSession, Product, SlotSet
 from agent_shopper.reranker import (
     HeuristicReranker,
@@ -203,21 +203,52 @@ class LLMRerankerTest(unittest.TestCase):
 
     @patch("agent_shopper.reranker.call_structured")
     def test_success_path_marks_used_llm(self, mock_call) -> None:
-        mock_call.return_value = RerankResponse(judgments=[
-            Judgment(index=0, relevance_score=0.9), Judgment(index=1, relevance_score=0.5), Judgment(index=2, relevance_score=0.1),
-        ])
+        mock_call.return_value = (
+            RerankResponse(judgments=[
+                Judgment(index=0, relevance_score=0.9), Judgment(index=1, relevance_score=0.5), Judgment(index=2, relevance_score=0.1),
+            ]),
+            TokenUsage(prompt_tokens=123, completion_tokens=45),
+        )
         rr = LLMReranker()
         ranked = rr.rerank(_ctx(), self.candidates, top_k=3)
         self.assertTrue(rr.last_call_used_llm)
         self.assertEqual(len(ranked), 3)
 
     @patch("agent_shopper.reranker.call_structured")
+    def test_success_path_captures_real_usage(self, mock_call) -> None:
+        mock_call.return_value = (
+            RerankResponse(judgments=[Judgment(index=0, relevance_score=0.5)]),
+            TokenUsage(prompt_tokens=200, completion_tokens=30),
+        )
+        rr = LLMReranker()
+        rr.rerank(_ctx(), self.candidates, top_k=3)
+        self.assertEqual(rr.last_usage, TokenUsage(prompt_tokens=200, completion_tokens=30))
+        self.assertIsNone(rr.last_failure_reason)
+        self.assertIsNotNone(rr.last_payload)
+        self.assertIsNotNone(rr.last_response_judgments)
+
+    @patch("agent_shopper.reranker.call_structured")
     def test_failure_falls_back_to_heuristic_without_raising(self, mock_call) -> None:
-        mock_call.side_effect = LLMUnavailable("boom")
+        mock_call.side_effect = LLMUnavailable("boom", cause_type="APITimeoutError")
         rr = LLMReranker()
         ranked = rr.rerank(_ctx(), self.candidates, top_k=3)  # must not raise
         self.assertFalse(rr.last_call_used_llm)
         self.assertEqual(len(ranked), 3)
+
+    @patch("agent_shopper.reranker.call_structured")
+    def test_failure_captures_zero_usage_and_reason(self, mock_call) -> None:
+        mock_call.side_effect = LLMUnavailable("boom", cause_type="APITimeoutError")
+        rr = LLMReranker()
+        rr.rerank(_ctx(), self.candidates, top_k=3)
+        self.assertEqual(rr.last_usage, TokenUsage())
+        self.assertEqual(rr.last_failure_reason, "APITimeoutError")
+
+    @patch("agent_shopper.reranker.call_structured")
+    def test_failure_without_cause_type_falls_back_to_unknown(self, mock_call) -> None:
+        mock_call.side_effect = LLMUnavailable("boom")  # no cause_type given
+        rr = LLMReranker()
+        rr.rerank(_ctx(), self.candidates, top_k=3)
+        self.assertEqual(rr.last_failure_reason, "unknown")
 
     def test_empty_candidates_never_calls_llm(self) -> None:
         rr = LLMReranker()
@@ -225,6 +256,33 @@ class LLMRerankerTest(unittest.TestCase):
             ranked = rr.rerank(_ctx(), [], top_k=3)
         mock_call.assert_not_called()
         self.assertEqual(ranked, [])
+
+    @patch("agent_shopper.reranker.call_structured")
+    def test_shuffle_seed_reorders_prompt_but_reconciles_correctly(self, mock_call) -> None:
+        # With shuffle_seed set, the LLM should still see every candidate
+        # exactly once, and the reconciled ranking should honor the scores
+        # returned regardless of prompt order -- _reconcile maps by the
+        # payload's own index, which reflects the shuffled order.
+        def fake_call(system_prompt, payload, schema):
+            # Judge whichever candidate landed at prompt index 0 as the best.
+            n = len(payload["candidates"])
+            judgments = [Judgment(index=i, relevance_score=1.0 if i == 0 else 0.1) for i in range(n)]
+            return RerankResponse(judgments=judgments), TokenUsage()
+
+        mock_call.side_effect = fake_call
+        rr = LLMReranker(shuffle_seed=42)
+        ranked = rr.rerank(_ctx(), self.candidates, top_k=3)
+        self.assertEqual(len(ranked), 3)
+        # Whichever product the shuffle put at index 0 should win the top
+        # rank -- i.e. reconciliation is self-consistent with the shuffled
+        # order actually sent, not the original candidate order.
+        self.assertEqual(rr.last_payload["candidates"][0]["index"], 0)
+        top_asin = ranked[0].product.parent_asin
+        shuffled_first_title = rr.last_payload["candidates"][0]["title"]
+        self.assertTrue(any(
+            c.product.parent_asin == top_asin and c.product.title[:120] == shuffled_first_title
+            for c in self.candidates
+        ))
 
 
 if __name__ == "__main__":

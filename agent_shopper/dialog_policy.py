@@ -15,6 +15,7 @@ from collections import defaultdict
 from dataclasses import replace
 
 from agent_shopper import context as context_mod
+from agent_shopper import cross_encoder_reranker as cross_encoder_reranker_mod
 from agent_shopper import intent as intent_mod
 from agent_shopper import orchestrator as orchestrator_mod
 from agent_shopper import reranker as reranker_mod
@@ -22,10 +23,16 @@ from agent_shopper import retrieval as retrieval_mod
 from agent_shopper import slots as slots_mod
 from agent_shopper.bm25_index import BM25Index
 from agent_shopper.catalog import Catalog
-from agent_shopper.config import LLM_MAX_FAILURES_BEFORE_CIRCUIT_BREAK, MAX_TURNS, SIMULATOR_DISCLOSABLE_ATTRIBUTES
+from agent_shopper.config import (
+    FORCE_HEURISTIC,
+    FROZEN_CROSS_ENCODER_ENABLED,
+    LLM_MAX_FAILURES_BEFORE_CIRCUIT_BREAK,
+    MAX_TURNS,
+    SIMULATOR_DISCLOSABLE_ATTRIBUTES,
+)
 from agent_shopper.dense_index import DenseIndex
-from agent_shopper.dialog_state import OverrideEvent, SessionState, ShownRecord
-from agent_shopper.llm_client import active_provider
+from agent_shopper.dialog_state import EngineDecision, OverrideEvent, SessionState, ShownRecord
+from agent_shopper.llm_client import TokenUsage, active_provider
 from agent_shopper.models import Candidate, Product, SlotSet
 from agent_shopper.override_model import OverrideModel
 from agent_shopper.tfidf_index import TfidfIndex
@@ -500,20 +507,43 @@ def process_turn(
         )
         ask_attribute = best_attr if do_clarify else None
 
-    engine = orchestrator_mod.decide_rerank_engine(
-        result.pool_size, turn, MAX_TURNS, active_provider() is not None, state.llm_disabled, do_clarify=do_clarify,
+    engine, route_reason = orchestrator_mod.decide_rerank_engine(
+        result.pool_size, turn, MAX_TURNS,
+        active_provider() is not None and not FORCE_HEURISTIC,
+        state.llm_disabled, do_clarify=do_clarify,
     )
+    usage = TokenUsage()
+    llm_outcome = None
+    llm_failure_reason = None
     if engine == "llm":
         rr = reranker_mod.LLMReranker()
         ranked = rr.rerank(ctx, result.candidates, top_k)
+        usage = rr.last_usage
         if rr.last_call_used_llm:
             state.llm_failure_count = 0
+            llm_outcome = "success"
         else:
             state.llm_failure_count += 1
             if state.llm_failure_count >= LLM_MAX_FAILURES_BEFORE_CIRCUIT_BREAK:
                 state.llm_disabled = True
+            llm_outcome = "failed"
+            llm_failure_reason = rr.last_failure_reason
+    elif FROZEN_CROSS_ENCODER_ENABLED:
+        # Separate, local, pointwise pilot -- never the listwise LLM path
+        # above. Only engaged when the orchestrator already chose the
+        # heuristic branch (engine != "llm"), so this can never change
+        # whether/when the paid LLM reranker runs. Falls back to the plain
+        # heuristic ranking internally on any load/inference failure -- see
+        # cross_encoder_reranker.FrozenCrossEncoderReranker.rerank.
+        ranked = cross_encoder_reranker_mod.get_frozen_cross_encoder_reranker().rerank(ctx, result.candidates, top_k)
     else:
         ranked = reranker_mod.HeuristicReranker().rerank(ctx, result.candidates, top_k)
+
+    state.engine_trace.append(EngineDecision(
+        turn=turn, engine=engine, route_reason=route_reason, llm_outcome=llm_outcome,
+        llm_failure_reason=llm_failure_reason,
+        prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
+    ))
 
     recommendations = [
         {"parent_asin": c.product.parent_asin, "score": round(c.final_score if c.final_score is not None else c.fused_score, 6)}
@@ -529,5 +559,5 @@ def process_turn(
         "message": _build_message(ask_attribute, len(recommendations), relaxed_slots, forced_relax_attribute),
         "ask_attribute": ask_attribute,
         "recommendations": recommendations,
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens},
     }

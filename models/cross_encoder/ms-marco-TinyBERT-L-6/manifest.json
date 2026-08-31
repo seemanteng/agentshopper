@@ -1,0 +1,41 @@
+{
+  "model_id": "cross-encoder/ms-marco-TinyBERT-L-6",
+  "revision": "defbb7d2405cfb2a0f9db418cd8a377c97469552",
+  "license": "Apache-2.0",
+  "source_url": "https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L-6",
+  "attribution": "Base architecture nreimers/TinyBERT_L-6_H-768_v2; fine-tuned by the cross-encoder/sentence-transformers project on MS MARCO Passage Ranking (sentence-transformers/msmarco). Frozen, inference-only use in this project -- no fine-tuning or gradient updates performed here.",
+  "generated_at": "2026-08-30T23:45:44",
+  "files": [
+    {
+      "path": "model.safetensors",
+      "size_bytes": 267839500,
+      "sha256": "44e975b3a25903d3d9cefbddc06505a0d6cc2eb8ff311f0da6ace9118b366753"
+    },
+    {
+      "path": "config.json",
+      "size_bytes": 612,
+      "sha256": "60a67ec692085a20bb885f65ee0d994eb0015bf73e07b367fdacd7f5cc8bea5d"
+    },
+    {
+      "path": "tokenizer.json",
+      "size_bytes": 711396,
+      "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size_bytes": 1330,
+      "sha256": "a5c2e5a7b1a29a0702cd28c08a399b5ecc110c263009d17f7e3b415f25905fd8"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size_bytes": 132,
+      "sha256": "3c3507f36dff57bce437223db3b3081d1e2b52ec3e56ee55438193ecb2c94dd6"
+    },
+    {
+      "path": "vocab.txt",
+      "size_bytes": 231508,
+      "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    }
+  ],
+  "tree_sha256": "c4f6aa9634481ad6208cf50c0a004fcde6aa8b76ac56ca76afd1767080607f8d"
+}

@@ -73,15 +73,17 @@ def _force_heuristic_only():
     """Ensures every reranker call made inside this block takes the free
     heuristic path, regardless of ambient OPENAI_API_KEY/ANTHROPIC_API_KEY.
 
-    config.FORCE_HEURISTIC is *not* actually wired into the production
-    per-turn engine choice in dialog_policy.process_turn -- it only gates
-    the separate, unused reranker.get_reranker() -- so setting the env var
-    alone does not guarantee the heuristic-only path there. Patching
+    As of the LLM-reranker benchmark work, config.FORCE_HEURISTIC (the
+    AGENT_SHOPPER_FORCE_HEURISTIC env var) IS wired into the production
+    per-turn engine choice in dialog_policy.process_turn -- so setting the
+    env var now works too (see scripts/run_llm_benchmark.py's --baseline).
+    This function still exists and is still used here because patching
     dialog_policy's own `active_provider` reference directly (not
     llm_client's, since `from x import y` binds a private copy of the name)
-    is what actually forces it, and is required for this script's
-    fit-vs-evaluate comparisons to be a clean, deterministic, zero-cost,
-    apples-to-apples measurement of the weights alone.
+    avoids depending on ambient environment/process state, which matters for
+    this script's fit-vs-evaluate comparisons being a clean, deterministic,
+    zero-cost, apples-to-apples measurement of the weights alone regardless
+    of how the calling shell happens to be configured.
     """
     with patch.object(dialog_policy_mod, "active_provider", return_value=None):
         yield
