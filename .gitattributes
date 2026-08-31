@@ -1,1 +1,6 @@
-*.safetensors filter=lfs diff=lfs merge=lfs -text
+# Scoped to the cross-encoder checkpoint only (255MB model.safetensors,
+# over GitHub's 100MB hard per-file push-block limit -- see README.md's
+# "Deployment readiness"). The dense-route checkpoint under models/dense/
+# is 87.3MB, under that limit, so it's committed as a plain file and
+# deliberately excluded from this pattern -- no LFS dependency needed for it.
+models/cross_encoder/**/*.safetensors filter=lfs diff=lfs merge=lfs -text

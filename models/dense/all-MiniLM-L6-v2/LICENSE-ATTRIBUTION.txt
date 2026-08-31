@@ -1,0 +1,31 @@
+Model: sentence-transformers/all-MiniLM-L6-v2
+Revision (commit hash): 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+Source: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+
+License: Apache License, Version 2.0 (SPDX: Apache-2.0)
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+Attribution:
+
+This checkpoint is a frozen, pre-trained sentence-embedding model published
+by the sentence-transformers project, built on the base architecture
+"nreimers/MiniLM-L6-H384-uncased" (6-layer, 384-hidden distilled BERT) and
+fine-tuned by the model publisher for general-purpose sentence similarity.
+
+This model is used here strictly frozen / inference-only -- no gradient
+updates, no fine-tuning, no further training was performed by this project
+(see agent_shopper/dense_index.py's module docstring). Weight files are
+copied byte-for-byte from the publisher's checkpoint; see manifest.json in
+this directory for per-file SHA-256 checksums and the overall deterministic
+tree hash.

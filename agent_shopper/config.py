@@ -22,6 +22,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Module-relative (never CWD-relative) repo root -- used below to point
+# DENSE_MODEL_NAME and FROZEN_CROSS_ENCODER_MODEL at their packaged,
+# offline-loadable checkpoint directories under models/.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
@@ -90,7 +95,16 @@ TFIDF_NGRAM_RANGE = (1, 2)
 # Frozen sentence-embedding model, no fine-tuning (competition spec puts
 # full base-model training out of scope; a frozen encoder is explicitly
 # allowed). Small and CPU-friendly by design -- see agent_shopper.dense_index.
-DENSE_MODEL_NAME = os.environ.get("AGENT_SHOPPER_DENSE_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+#
+# Module-relative default: the packaged, offline-loadable checkpoint produced
+# by scripts/prepare_dense_model_artifact.py -- sentence-transformers/
+# all-MiniLM-L6-v2 @ 1110a243fdf4706b3f48f1d95db1a4f5529b4d41, the exact
+# revision every dense-route number in README.md's "What we tried" was
+# measured with. Mirrors FROZEN_CROSS_ENCODER_MODEL's own packaging pattern
+# below -- unlike that checkpoint, this one is 87.3MB, under GitHub's 100MB
+# per-file push-block limit, so no Git LFS is needed to commit it.
+_PACKAGED_DENSE_MODEL_PATH = _REPO_ROOT / "models" / "dense" / "all-MiniLM-L6-v2"
+DENSE_MODEL_NAME = os.environ.get("AGENT_SHOPPER_DENSE_MODEL", str(_PACKAGED_DENSE_MODEL_PATH))
 
 # Per-field weights combining title/attributes/category/description cosine
 # similarities into one dense-route score. Title-heaviest, mirroring
@@ -107,18 +121,20 @@ DENSE_CACHE_DIR = os.environ.get("AGENT_SHOPPER_DENSE_CACHE_DIR", "data")
 # When true (the default), dense_index.DenseIndex never attempts a network
 # download for the embedding model (local_files_only=True, plus setting
 # HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE -- same mechanism
-# cross_encoder_reranker.py already uses). Unlike the cross-encoder, this
-# model isn't packaged into a local artefact in this repo, so a judging
-# environment that both disables network AND doesn't already have
-# sentence-transformers/all-MiniLM-L6-v2 cached will have the dense route
-# fail to load -- DenseIndex degrades gracefully when that happens (empty
+# cross_encoder_reranker.py already uses). Now packaged into a local
+# artefact exactly like the cross-encoder (see DENSE_MODEL_NAME above and
+# scripts/prepare_dense_model_artifact.py), so a judging environment needs
+# neither network access nor a pre-warmed Hugging Face cache to load it. If
+# AGENT_SHOPPER_DENSE_MODEL is overridden to point somewhere else that isn't
+# packaged, DenseIndex still degrades gracefully on a load failure (empty
 # field matrices, search() returns [], never crashes Agent() construction),
 # so the session still runs on keyword+vector+category alone rather than
 # failing every session outright. Defaulting to offline-only is still the
-# safer choice: without it, a network-disabled environment doesn't fail
-# fast -- it retries with exponential backoff (observed directly during
-# this project's own offline verification work), which can stall Agent()
-# construction for a long time before ultimately failing anyway.
+# safer choice even against the packaged path: without it, a network-
+# disabled environment doesn't fail fast -- it retries with exponential
+# backoff (observed directly during this project's own offline verification
+# work), which can stall Agent() construction for a long time before
+# ultimately failing anyway.
 DENSE_MODEL_LOCAL_FILES_ONLY = os.environ.get("AGENT_SHOPPER_DENSE_MODEL_LOCAL_ONLY", "1") not in ("", "0", "false", "False")
 
 # --- Pillar I: reranking ---------------------------------------------------
@@ -182,7 +198,6 @@ FROZEN_CROSS_ENCODER_ENABLED = os.environ.get("AGENT_SHOPPER_FROZEN_CROSS_ENCODE
 # inference (not a catchable Python exception -- see cross_encoder_reranker.py's
 # module docstring and README.md's "What we tried") and must never be used as
 # an active or fallback default; it is not referenced anywhere in this file.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
 _PACKAGED_CROSS_ENCODER_PATH = _REPO_ROOT / "models" / "cross_encoder" / "ms-marco-TinyBERT-L-6"
 FROZEN_CROSS_ENCODER_MODEL = os.environ.get("AGENT_SHOPPER_CROSS_ENCODER_MODEL", str(_PACKAGED_CROSS_ENCODER_PATH))
 

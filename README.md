@@ -29,6 +29,36 @@ The brief calls for four pillars; each maps to a small set of modules:
 The full per-turn algorithm lives in `dialog_policy.process_turn`; `agent.py`
 is intentionally a thin `reset()`/`respond()` shim over it.
 
+## How this was validated
+
+The discipline behind every number in this README, distilled up front so it
+doesn't require reading the full "What we tried" ledger below:
+
+- **Every `config.py` default was validated by an A/B run of the official
+  local evaluator before being locked in**, and refit/re-validated by
+  stratified k-fold CV (not a single train/eval split) for anything with
+  enough free parameters to overfit 200 sessions, like the learned reranker
+  weights and the override-probability model.
+- **A negative result is reverted in full, not kept as a disabled toggle** —
+  of the 21 changes attempted (see "What we tried"), close to half
+  regressed or measured neutral and were removed completely, including
+  their dead-code paths, rather than shipped gated off. Only changes that
+  won cleanly stayed.
+- **A local model artifact goes through offline replay and CV before it's
+  ever enabled by default**, then a fault-injected circuit-breaker test and
+  a full evaluation re-run against the *extracted submission archive*
+  itself (not the working tree) before being trusted as the shipped default
+  — this is exactly the path the frozen cross-encoder took.
+- **A working theory is corrected by direct measurement, not left standing
+  on inference** — e.g. the reranker's rating weight was assumed to be why
+  a class of misses couldn't recover; a targeted feature-contribution trace
+  found the real bottleneck was elsewhere, and the write-up follows the
+  measurement, not the original guess.
+- **A regression, once shipped, is caught and rolled back the same way it
+  was validated in** — e.g. the interactive-eval-confirmed hard-constraint
+  regex was tightened after a bisected eval run showed it firing on the
+  simulator's own scripted phrasing and dragging down `buying` Hit Rate@10.
+
 ### LLM usage: pluggable and optional
 
 A paid LLM is **not required**. The pipeline runs entirely free/local by
@@ -38,7 +68,14 @@ extraction, and a weighted heuristic reranker. If `OPENAI_API_KEY` or
 LLM judge call (`reranker.LLMReranker`), with automatic fallback to the
 heuristic path on any failure, a circuit breaker after repeated failures,
 and the last turn always using the fast local path regardless. Force the
-free path explicitly with `AGENT_SHOPPER_FORCE_HEURISTIC=1`.
+free path explicitly with `AGENT_SHOPPER_FORCE_HEURISTIC=1`. Every turn's
+`usage` field in the response is the real `prompt_tokens`/`completion_tokens`
+read off the provider SDK's own response object (`llm_client.call_structured`
+→ `LLMReranker.last_usage` → `dialog_policy`'s returned `usage` dict) — zero
+only when that turn genuinely made no LLM call (heuristic/cross-encoder
+path) or the call failed before a response came back, never a stub. This is
+what `scripts/estimate_llm_cost.py` aggregates into the cost projection
+cited above.
 
 ### Frozen cross-encoder reranking: validated, shipped as the default
 
@@ -256,24 +293,34 @@ own docstring). The underlying checkpoint (`models/cross_encoder/ms-marco-TinyBE
 allowed — see "resolved" above for the organizer's stated preference for a
 download-based approach instead, which this doesn't currently follow.
 
-**A related finding, since fixed (see the dense-route entry in "What we
-tried" for the full story):** the pre-existing dense-retrieval route
-(`agent_shopper/dense_index.py`, `config.DENSE_MODEL_NAME` =
-`sentence-transformers/all-MiniLM-L6-v2`) participates in every turn's
-retrieval and originally had no `local_files_only` support and no error
-handling at all around model loading — worse than "would attempt a real
-network call," a load failure or a slow network-disabled retry loop
-(observed directly during this project's own offline-verification testing)
-would propagate uncaught through `Agent()` construction, which is called
-once and reused for every session — a whole-submission risk, not a
-per-turn one. Now mirrors the cross-encoder's own offline-enforcement and
-graceful-degradation pattern exactly (`config.DENSE_MODEL_LOCAL_FILES_ONLY`,
-default on). What remains open: the model itself still isn't packaged into
-a local artefact the way the cross-encoder checkpoint is, so a judging
-environment that's both network-disabled and doesn't already have this
-model cached will still lose the dense route for the run — now a fast,
-contained, graceful loss instead of a hang or a crash, but not yet a fully
-solved packaging gap.
+**A related finding, since fixed and, as of this pass, fully closed (see
+the dense-route entry in "What we tried" for the full story):** the
+pre-existing dense-retrieval route (`agent_shopper/dense_index.py`)
+participates in every turn's retrieval and originally had no
+`local_files_only` support and no error handling at all around model
+loading — worse than "would attempt a real network call," a load failure or
+a slow network-disabled retry loop (observed directly during this project's
+own offline-verification testing) would propagate uncaught through
+`Agent()` construction, which is called once and reused for every session —
+a whole-submission risk, not a per-turn one. First fixed to mirror the
+cross-encoder's own offline-enforcement and graceful-degradation pattern
+exactly (`config.DENSE_MODEL_LOCAL_FILES_ONLY`, default on), which made a
+load failure fast and contained instead of a hang or crash but still left
+the model itself unpackaged. That remaining gap is now closed the same way
+the cross-encoder's was: `scripts/prepare_dense_model_artifact.py` packages
+`sentence-transformers/all-MiniLM-L6-v2` @ revision
+`1110a243fdf4706b3f48f1d95db1a4f5529b4d41` into a self-contained,
+checksummed local artefact at `models/dense/all-MiniLM-L6-v2/`
+(`config.DENSE_MODEL_NAME` now defaults to this packaged path), and it's
+been verified to load with zero `AGENT_SHOPPER_*`/`HF_*` environment
+variables and, separately, with `HF_HOME` pointed at a freshly-created empty
+directory — no developer cache reachable at all — followed by a real
+`DenseIndex` build-and-search call against the loaded model to confirm the
+whole pipeline works end to end, not just the load call in isolation. At
+87.3 MB, this checkpoint is under GitHub's 100 MB per-file push-block limit,
+so — unlike the cross-encoder checkpoint — it's committed as a plain file
+with no Git LFS dependency at all (`.gitattributes`'s LFS rule is scoped to
+`models/cross_encoder/` specifically for this reason).
 
 **Submission default vs. experimental.** The frozen cross-encoder is the
 **submission default** (`AGENT_SHOPPER_FROZEN_CROSS_ENCODER` defaults to
@@ -285,13 +332,12 @@ metric). All three organizer questions that previously withheld a
 "deployment-ready" claim are now resolved (see "resolved" above) and don't
 block it: no timeout, no package-size limit, and checkpoint bundling is
 allowed. What's honestly still open, so this isn't oversold as fully
-certified either: (1) the organizer's stated *preference* for download-based
-large-asset delivery over a committed LFS blob isn't followed yet, and (2)
-the dense route's own embedding model still isn't packaged into a local
-artefact, so it depends on the team's own environment already having it
-cached or having network access at setup time (an offline fallback isn't
-required per the organizer's policy, but it's also not yet built for this
-one route).
+certified either: the organizer's stated *preference* for download-based
+large-asset delivery over a committed LFS blob isn't followed yet for the
+cross-encoder checkpoint (the dense checkpoint sidesteps this entirely by
+not needing LFS in the first place, per above). The dense route's own
+embedding-*cache* rebuild cost (not the model — see "What we tried") is a
+separate, smaller, still-open item: see "Limitations."
 
 **Reproduction command** (exact validated configuration, zero cross-encoder-
 specific environment variables required — shown here explicitly for
@@ -579,10 +625,15 @@ once a comparison was decided. In order of impact:
   magnitude, not a new bottleneck) and per-query dense search latency
   benchmarks at ~92ms, in line with the existing bm25 (89ms) and vector
   (142ms) routes, not slower. The 27-minute cost is a one-time catalog
-  build, never a per-query cost -- but the 245MB cache file itself is
-  currently local-only (gitignored); a fresh clone without it would pay
-  that 27 minutes again on first run, which is worth addressing before
-  this is judged/deployed anywhere the cache doesn't travel with it.
+  build, never a per-query cost -- and, since the model packaging below
+  removed the *network* dependency that one-time build used to carry (it no
+  longer needs to download or find a cached copy of the encoder to start),
+  a fresh clone is now guaranteed to complete that build offline rather than
+  possibly stalling or failing on a network-disabled machine -- it just
+  still costs the same ~27 CPU-minutes once. The 245MB *embeddings* cache
+  file itself (not the model -- see below) remains local-only (gitignored)
+  and isn't itself packaged/committed, so that CPU cost is still paid again
+  on a fresh clone; see "Limitations" for this narrower remaining item.
 
   **Offline-safety hardening (later pass, prompted by the cross-encoder
   promotion work):** unlike the cross-encoder, this route had no
@@ -605,11 +656,17 @@ once a comparison was decided. In order of impact:
   pipeline: a broken model path no longer crashes or hangs `Agent()`
   construction, sessions complete normally on keyword+vector+category
   alone, and the working path is unaffected (confirmed `_model_load_failed
-  is False`, identical recommendation counts). This does **not** solve the
-  separate packaging gap above (the model itself still isn't vendored, so a
-  network-disabled *and* not-already-cached judging environment will still
-  lose this route) -- it only makes that failure fast and contained instead
-  of a slow hang or a fatal crash.
+  is False`, identical recommendation counts). At the time this hardening
+  pass landed, it deliberately did **not** solve the separate packaging gap
+  (the model itself wasn't vendored yet, so a network-disabled *and*
+  not-already-cached judging environment would still lose this route) --
+  it only made that failure fast and contained instead of a slow hang or a
+  fatal crash. **That packaging gap is now closed** (see "Deployment
+  readiness"'s "A related finding, since fixed and, as of this pass, fully
+  closed" and `scripts/prepare_dense_model_artifact.py`) -- this graceful-
+  degradation path remains as a belt-and-suspenders fallback for anyone who
+  overrides `AGENT_SHOPPER_DENSE_MODEL` away from the packaged default, not
+  the primary way the shipped configuration is expected to work.
 - **Calibrated override-probability model** (`agent_shopper/override_model.py`,
   `agent_shopper.dialog_policy._override_features`): a small logistic
   regression predicting P(this turn is an intent reversal) from 5 features
@@ -823,9 +880,9 @@ once a comparison was decided. In order of impact:
 
   **Phase 9 (full 200-session confirmation, `alpha=0.30`)**: HitRate@10
   0.675→**0.705** (+6 sessions), MRR 0.410→**0.439**, MTTC 5.66→**5.27**,
-  TechnicalScore 0.5674→**0.5989** (+0.0315 — matching the CV's mean
-  prediction almost exactly, a meaningful internal-consistency check against
-  the CV result being fold-partition noise). Session-level diff: 6 miss→hit
+  TechnicalScore 0.5674→**0.5989** (≈**0.60**, +0.0315 — matching the CV's
+  mean prediction almost exactly, a meaningful internal-consistency check
+  against the CV result being fold-partition noise). Session-level diff: 6 miss→hit
   (`public_0002` intent_override, `public_0005`/`0058`/`0107` buying,
   `public_0059`/`0115` browsing), **0 hit→miss** (confirms none of the 8
   baseline hits the Oracle diagnostic flagged as originating below fused
@@ -842,11 +899,13 @@ once a comparison was decided. In order of impact:
   would add roughly 10-40s of total latency, not the 40-75 minutes the
   batch CV/offline runs took evaluating hundreds of simulated sessions.
   Checkpoint size: `ms-marco-TinyBERT-L-6` ≈256MB on disk vs. the intended
-  `ms-marco-MiniLM-L-6-v2` ≈88MB — not vendored in this repository; for
-  network-free judging, download once and point
-  `AGENT_SHOPPER_CROSS_ENCODER_MODEL` at the local directory with
-  `AGENT_SHOPPER_CROSS_ENCODER_LOCAL_ONLY=1` (`local_files_only=True`,
-  never attempts a download).
+  `ms-marco-MiniLM-L-6-v2` ≈88MB. At the time this pilot was run, neither was
+  vendored in this repository and network-free judging would have meant
+  downloading it manually and pointing `AGENT_SHOPPER_CROSS_ENCODER_MODEL`
+  at the local directory with `AGENT_SHOPPER_CROSS_ENCODER_LOCAL_ONLY=1` --
+  see the "Updated verdict" below and "Deployment readiness" for how this
+  was actually resolved (the substitute checkpoint is now packaged and
+  committed, no manual download needed).
 
   **Original verdict (superseded, kept for the record): kept as an explicit,
   off-by-default experimental pilot, not shipped enabled.** The CV/
@@ -1023,35 +1082,22 @@ once a comparison was decided. In order of impact:
 ## Limitations and what we'd improve with more time
 
 - **26 of 200 public sessions never recall the target from any route at
-  any depth** (see "What we tried") — a genuine, unsolved retrieval-side
-  gap, three attempts in, plus a direct measurement
-  (`scripts/diagnose_reranker_weight_gap.py`) that corrected the working
-  theory rather than confirming it. The earlier assumption — "`rating`
-  dominates `HeuristicReranker`'s weighted sum ~9x, so a structurally-
-  matching-but-lexically-absent candidate mostly can't win" — turned out to
-  be an *inference from the raw weights*, never actually measured, and the
-  measurement doesn't support it the way expected. Only 2 of the 26
-  sessions' targets ever entered attempt #3's capped, rating-ranked
-  injection at all (`rank_by_rating` selects *which* 10 candidates get a
-  shot at all — this is where `rating` actually gates the process, not in
-  the final reranking); for those 2, the real per-feature contribution
-  breakdown shows `bm25` (lexical absence), not `rating`, as the dominant
-  reason the target still lost — in both cases `rating`'s own contribution
-  was small or actually favored the target over the candidate that beat it
-  (`_rating_score`'s confidence-shrunk scale compresses real rating gaps
-  more than raw min-max-normalized `bm25`/`vector` gaps do, so despite its
-  larger raw weight, `rating` moves the composite score less in practice
-  than a route that swings from "found" to "not found"). n=2 is too small
-  to generalize the *reranking-stage* finding with confidence, but it's
-  enough to retire the "rating dominates" framing as stated. The real
-  two-layer picture: most of the 26 (24/26) are blocked by the injection's
-  own rating-based selection before reranking is ever reached; the handful
-  that clear that bar are then blocked by lexical absence, not rating, once
-  they get there. A version worth trying next would need to change *how
-  candidates are selected for injection* (not just how they're weighted
-  once in the pool) — e.g. select by `attr_match` quality instead of
-  `rating`, or by both — and would still need to address the lexical-
-  absence gap separately for whichever candidates that surfaces.
+  any depth** (see "What we tried" for the full diagnostic trail) — a
+  genuine, unsolved retrieval-side gap. The bottleneck is two layers,
+  confirmed by a direct per-feature contribution measurement
+  (`scripts/diagnose_reranker_weight_gap.py`) rather than inferred from the
+  reranker's raw feature weights: (1) for 24 of the 26, a rating-ranked
+  injection of structurally-matching candidates never surfaces the target
+  in the first place — `rank_by_rating` decides which candidates get a shot
+  at all, and most of these targets simply aren't highly rated; (2) for the
+  remaining 2 that do get selected, `bm25` (lexical absence), not `rating`,
+  is the dominant reason the target still loses in the final reranking —
+  `rating`'s confidence-shrunk scoring scale actually moves the composite
+  score less than its larger raw weight would suggest, compared to a route
+  swinging from "found" to "not found". A fix would need to change *how
+  candidates are selected for injection* (e.g. by `attr_match` quality
+  instead of `rating`) and separately address the lexical-absence gap for
+  whichever candidates that surfaces.
 - **Slot extraction is keyword/regex-based**, not learned — it covers the
   vocabulary we hand-curated (materials, colors, styles, use-cases,
   category words) and will miss paraphrases outside that list. A small
@@ -1081,6 +1127,16 @@ once a comparison was decided. In order of impact:
   classic failure mode (pulling in semantically-similar-but-wrong-category
   items) hasn't been specifically
   stress-tested beyond the aggregate eval numbers in "What we tried".
+- **The dense route's 50k-catalog embedding cache (~245MB) isn't itself
+  packaged or committed** — only the encoder model that produces it is (see
+  "Deployment readiness"). The encoder now loads fully offline, so a fresh
+  clone's one-time ~27-minute embedding build no longer depends on network
+  access or a pre-warmed Hugging Face cache to *start*, but it still has to
+  actually run that ~27 minutes of CPU work once, since the resulting
+  embeddings aren't vendored the way the model weights are. Packaging the
+  embeddings themselves (or committing/publishing the cache file as a
+  release asset, the way the organizer's stated preference already
+  suggests for large assets) would remove that remaining one-time cost too.
 - **No browsing-track diversity pass** — the competition's TechnicalScore
   has no diversity term at all, so an MMR-lite subcategory/store penalty
   could only ever demote the true purchased item's rank in exchange for
@@ -1122,10 +1178,6 @@ once a comparison was decided. In order of impact:
   an isolated single-user interaction with no cross-session history
   available — this is a scope decision, not an oversight, but a production
   deployment would obviously want real cross-session memory.
-- Token usage reporting (`usage` in the response) is currently a static
-  `{0, 0}` for the LLM path; wiring through the actual `response.usage`
-  from the provider call would make the reported cost/feasibility numbers
-  exact rather than absent.
 
 ## Team member contributions
 

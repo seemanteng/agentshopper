@@ -82,21 +82,39 @@ def _catalog_fingerprint(catalog: Catalog) -> str:
     return h.hexdigest()[:12]
 
 
+def _model_cache_slug(model_name: str) -> str:
+    """A short, portable cache-filename component for a model identifier.
+    ``model_name`` is either a Hugging Face repo id ("org/name", never a
+    real local path) or the packaged local checkpoint directory (see
+    config.DENSE_MODEL_NAME) -- in the latter case, embedding the full
+    absolute path directly would make the cache filename both ugly and
+    needlessly sensitive to where the repo happens to be checked out, so
+    only the directory's own name is used instead."""
+    path = Path(model_name)
+    if path.exists():
+        return path.name
+    return model_name.replace("/", "_")
+
+
 def default_cache_path(catalog: Catalog, model_name: str = DENSE_MODEL_NAME) -> Path:
-    safe_model = model_name.replace("/", "_")
+    safe_model = _model_cache_slug(model_name)
     return Path(DENSE_CACHE_DIR) / f".dense_cache_{safe_model}_{_catalog_fingerprint(catalog)}.npz"
 
 
 class DenseIndex:
     """Failures degrade gracefully rather than propagate: if the embedding
-    model can't load (network-disabled judging environment + not already
-    cached -- see config.DENSE_MODEL_LOCAL_FILES_ONLY), this route
-    contributes nothing (empty field matrices, search() returns []) instead
-    of crashing Agent() construction, which is called once and reused for
-    every session -- a hard failure here would otherwise take down the
-    entire submission, not just this one route's contribution. Mirrors
-    cross_encoder_reranker.CrossEncoderUnavailable's "never let it crash"
-    contract, just at construction time rather than per-call."""
+    model can't load, this route contributes nothing (empty field matrices,
+    search() returns []) instead of crashing Agent() construction, which is
+    called once and reused for every session -- a hard failure here would
+    otherwise take down the entire submission, not just this one route's
+    contribution. Mirrors cross_encoder_reranker.CrossEncoderUnavailable's
+    "never let it crash" contract, just at construction time rather than
+    per-call. The default model path is now a packaged, self-contained local
+    checkpoint (see config.DENSE_MODEL_NAME and
+    scripts/prepare_dense_model_artifact.py) loaded with
+    local_files_only=True (config.DENSE_MODEL_LOCAL_FILES_ONLY), so this
+    fallback is now a genuine belt-and-suspenders path -- not the primary
+    way a judging environment is expected to get this route working."""
 
     def __init__(
         self, catalog: Catalog, model_name: str = DENSE_MODEL_NAME, cache_path: Path | str | None = None,
