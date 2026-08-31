@@ -969,15 +969,34 @@ once a comparison was decided. In order of impact:
   measured 21/26 "recoverable" — an artifact of having no depth cap at
   all, not a realistic estimate.) Even the 2 sessions where the target did
   enter the injected set still didn't survive `HeuristicReranker`'s own
-  scoring into the real top-10 — its 5-feature composite is dominated by
-  `rating` (~9x the other weights) and a fresh keyword/vector score of 0
-  for a never-lexically-surfaced candidate, so simply being present in the
-  pool is far from sufficient. This 26-session gap remains open;
-  a structured-match signal that can survive `HeuristicReranker`'s own
-  feature weighting (not just enter the pool) would need to compete on
-  something closer to its actual 5 features, not an independent rating-
-  based selection — a different, unexplored design, not a smaller version
-  of #1/#2.
+  scoring into the real top-10 — assumed at the time to be `rating`
+  (~9x the other raw weights) dominating the 5-feature composite against a
+  fresh keyword/vector score of 0 for a never-lexically-surfaced candidate.
+
+  **Follow-up spot-check, because that was an inference from the weights,
+  never actually measured** (`scripts/diagnose_reranker_weight_gap.py`):
+  computed the real per-feature weighted-contribution breakdown for both
+  comparable sessions (`public_0040`, `public_0180`) using
+  `HeuristicReranker`'s own `_feature_vector`. The assumption didn't hold —
+  in both cases `bm25` (lexical absence), not `rating`, was the dominant
+  contributor to the gap, and `rating`'s own contribution was small or
+  actually favored the target (`public_0040`: `bm25`=+1.43, `attr_match`=
+  -1.32, `rating`=+0.18; `public_0180`: `bm25`=+1.03, `vector`=+0.53,
+  `rating`=-0.99 — `rating`'s confidence-shrunk scale compresses real gaps
+  more than a route swinging from "found" to "not found" does, so its
+  larger raw weight moves the composite less in practice). n=2 is too
+  small to generalize the reranking-stage finding, but large enough to
+  retire "rating dominates" as the accepted explanation. The real
+  bottleneck is two layers: `rating`'s actual leverage is in *which*
+  candidates the injection selects in the first place (`rank_by_rating`
+  excludes 24 of 26 targets before reranking is ever reached), not in the
+  final scoring of whichever ones survive that cut. This 26-session gap
+  remains open; a structured-match signal that can survive
+  `HeuristicReranker`'s own feature weighting (not just enter the pool)
+  would need either a different injection-selection criterion (not
+  `rating`) or a fabricated bm25/vector-comparable score, not an
+  independent rating-based selection — a different, unexplored design, not
+  a smaller version of #1/#2.
 
 ## Development tools, APIs, libraries, and data
 
@@ -1005,23 +1024,34 @@ once a comparison was decided. In order of impact:
 
 - **26 of 200 public sessions never recall the target from any route at
   any depth** (see "What we tried") — a genuine, unsolved retrieval-side
-  gap, three attempts in. The dominant pattern (structurally present in the
-  accumulated slots but never independently recalled, since ungated turns'
-  category signal only re-ranks what keyword/vector/dense already
-  surfaced) is well-evidenced, but every fix tried so far regresses or
-  fails once measured against the *real* `HeuristicReranker` rather than
-  raw candidate availability — including a capped, rating-ranked injection
-  designed specifically to be conservative, which got 0/26 real recoveries
-  before implementation was even attempted. The common failure mode: a
-  candidate has to compete on `HeuristicReranker`'s actual 5 learned
-  features (`bm25`, `vector`, `attr_match`, `rating`, `price_fit` —
-  `rating` dominates ~9x) to survive into a real top-10, and a
-  structurally-matching-but-unrated-or-lexically-absent candidate mostly
-  doesn't. A version worth trying next would need to give the injected
-  candidates a *fabricated* bm25/vector-comparable score (not just
-  presence) so they compete on the same terms as everything else, or
-  accept this gap as retrieval-hard on this catalog rather than reranker-
-  fixable.
+  gap, three attempts in, plus a direct measurement
+  (`scripts/diagnose_reranker_weight_gap.py`) that corrected the working
+  theory rather than confirming it. The earlier assumption — "`rating`
+  dominates `HeuristicReranker`'s weighted sum ~9x, so a structurally-
+  matching-but-lexically-absent candidate mostly can't win" — turned out to
+  be an *inference from the raw weights*, never actually measured, and the
+  measurement doesn't support it the way expected. Only 2 of the 26
+  sessions' targets ever entered attempt #3's capped, rating-ranked
+  injection at all (`rank_by_rating` selects *which* 10 candidates get a
+  shot at all — this is where `rating` actually gates the process, not in
+  the final reranking); for those 2, the real per-feature contribution
+  breakdown shows `bm25` (lexical absence), not `rating`, as the dominant
+  reason the target still lost — in both cases `rating`'s own contribution
+  was small or actually favored the target over the candidate that beat it
+  (`_rating_score`'s confidence-shrunk scale compresses real rating gaps
+  more than raw min-max-normalized `bm25`/`vector` gaps do, so despite its
+  larger raw weight, `rating` moves the composite score less in practice
+  than a route that swings from "found" to "not found"). n=2 is too small
+  to generalize the *reranking-stage* finding with confidence, but it's
+  enough to retire the "rating dominates" framing as stated. The real
+  two-layer picture: most of the 26 (24/26) are blocked by the injection's
+  own rating-based selection before reranking is ever reached; the handful
+  that clear that bar are then blocked by lexical absence, not rating, once
+  they get there. A version worth trying next would need to change *how
+  candidates are selected for injection* (not just how they're weighted
+  once in the pool) — e.g. select by `attr_match` quality instead of
+  `rating`, or by both — and would still need to address the lexical-
+  absence gap separately for whichever candidates that surfaces.
 - **Slot extraction is keyword/regex-based**, not learned — it covers the
   vocabulary we hand-curated (materials, colors, styles, use-cases,
   category words) and will miss paraphrases outside that list. A small
